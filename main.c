@@ -101,7 +101,7 @@ void init_485_uart()   //9600@11.0592  //初始化串口2, 9600,8,n,1
 	T2H = 0xFE;				
 	AUXR |= 0x10;			
 	
-	IE2 = 0x1;
+	IE2 |= 0x1;
 	EA = 1;    //开中断
 }
 
@@ -174,7 +174,8 @@ void init_system()														//系统初始化
 	init_io();   							 									//初始化io
 	init_debug_uart();         									//初始化调试串口1,9600,8，n,1
 	init_485_uart();  				 									//初始化串口2, 9600,8,n,1
-	
+	adc_sensor_init(); 														//初始化ADC
+	uart_adc_init(); 																//初始化ADC串口
 	Timer0Init();              									//定时器0用于485串口接收超时判断
 
 //	send_buffer("run...\r\n",8);   						//调试用	
@@ -194,6 +195,9 @@ void loop_system()																						//系统运行处理
 	//		debug_out("parse_recv_buffer() ok\r\n\0");
 		}else
 		{
+			adc_sensor_read_all();  //读取ADC数据
+			// uart_adc_get_voltage();  //读取ADC电压数据
+			// uart_adc_get_current();  //读取ADC电流数据
 //			debug_out("parse_recv_buffer() error\r\n\0");
 		}
 
