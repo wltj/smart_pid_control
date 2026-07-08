@@ -1,0 +1,29 @@
+# Keil/uVision build output
+Listings/
+Objects/
+
+# uVision user/session files
+*.uvgui.*
+*.uvguix.*
+*.uvgui
+*.uvguix
+*.bak
+
+# Build artifacts
+*.obj
+*.lst
+*.map
+*.m51
+*.hex
+*.bin
+*.elf
+*.axf
+*.lnp
+
+# Editor/OS files
+.vscode/
+.idea/
+*.swp
+*.tmp
+Thumbs.db
+Desktop.ini
