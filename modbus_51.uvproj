@@ -411,6 +411,16 @@
               <FileType>1</FileType>
               <FilePath>.\uart_adc.c</FilePath>
             </File>
+            <File>
+              <FileName>alarm_manager.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\alarm_manager.c</FilePath>
+            </File>
+            <File>
+              <FileName>pid_drive.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\pid_drive.c</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>

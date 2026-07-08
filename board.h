@@ -173,6 +173,28 @@ typedef signed long    int32_t;
 #define MAINTENANCE_READ()      PIN_RD(IO_MAINTENANCE_PORT, IO_MAINTENANCE_PIN)
 #define PHASE_LOSS_DET_READ()   PIN_RD(IO_PHASE_LOSS_DET_PORT, IO_PHASE_LOSS_DET_PIN)
 
+/*============================================================================
+ * 位操作辅助宏（适用于所有I/O口）
+ *============================================================================*/
+#define BIT(n) (1 << (n))
+
+#define READ_PIN(PORT, PIN) (((PORT) & BIT(PIN)) != 0)
+#define SET_PIN(PORT, PIN)  \
+    do                      \
+    {                       \
+        (PORT) |= BIT(PIN); \
+    } while (0)
+#define CLR_PIN(PORT, PIN)   \
+    do                       \
+    {                        \
+        (PORT) &= ~BIT(PIN); \
+    } while (0)
+#define TOGGLE_PIN(PORT, PIN) \
+    do                        \
+    {                         \
+        (PORT) ^= BIT(PIN);   \
+    } while (0)
+
 /*=========================================================================
   外部串口采集直流电压/电流全局变量接口
 =========================================================================*/

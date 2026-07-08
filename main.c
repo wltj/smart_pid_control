@@ -10,6 +10,10 @@
 
 #define S2RI  0x01          //S2CON.0
 #define S2TI  0x02          //S2CON.1
+#define ES2   0x01          //IE2.0
+
+#define PCA_5MS_RELOAD_H  0xEE
+#define PCA_5MS_RELOAD_L  0x00
 
 #if UART_RS485_NUM != 2
 #error "init_485_uart only supports UART2"
@@ -22,6 +26,8 @@ int xdata g_need_times = 10;            //超时定时时间 10 x 5ms
 int xdata g_current_need_times = 0;     //超时实际时间
 volatile unsigned char xdata g_need_process_datas = 0;   //需要处理数据标志
 extern unsigned char dev_address;          //设备地址，默认为1
+
+volatile unsigned int xdata g_system_tick_5ms = 0;
 
 extern int xdata modbus_relay_delay_time[16];
 extern unsigned char xdata modbus_relay_delay_time_eeprom[16];
@@ -101,50 +107,83 @@ void init_485_uart()   //9600@11.0592  //初始化串口2, 9600,8,n,1
 	T2H = 0xFE;				
 	AUXR |= 0x10;			
 	
-	IE2 |= 0x1;
+	IE2 |= ES2;
 	EA = 1;    //开中断
 }
 
-void UART2_Isr() interrupt 8 
+void UART2_Isr() interrupt 8
 {
-	if (S2CON & 0x01) 
+	if (S2CON & S2RI)
 	{
-		S2CON &= ~0x01;                         
-    if (g_need_process_datas) return;              						//如果正在处理数据，则不接收
-		if (g_recv_buffer_index >= 64) g_recv_buffer_index = 0;  	//溢出处理
-		g_recv_buffer[g_recv_buffer_index++] = S2BUF;   					//将接收到的数据保存到 接收缓冲区
-		g_current_need_times = g_need_times;           						//收到数据，则重新计算超时时间			
+		S2CON &= ~S2RI;
+		if (g_need_process_datas) return;
+		if (g_recv_buffer_index >= 64) g_recv_buffer_index = 0;
+		g_recv_buffer[g_recv_buffer_index++] = S2BUF;
+		g_current_need_times = g_need_times;
+	}
+	if (S2CON & S2TI)
+	{
+		S2CON &= ~S2TI;
 	}
 }
 
-void send_buffer(unsigned char *buf,int len)									//发送数据
+void send_buffer(unsigned char *buf,int len)
 {
-	RS485_SEND_EN();					//设置485为发送状态
+	unsigned char ie2_backup;
+
+	ie2_backup = IE2;
+	IE2 &= ~ES2;
+	RS485_SEND_EN();
 	Delay5ms();
 	while (len--) {
-		S2CON &= ~S2TI;     					//Clear transmit interrupt flag
+		S2CON &= ~S2TI;
 		S2BUF = *buf++;
 		while ((S2CON & S2TI) == 0);
 	}
+	S2CON &= ~S2TI;
 	Delay5ms();
-	RS485_RECV_EN();   			//设置485为接收状态
+	RS485_RECV_EN();
+	IE2 = ie2_backup;
 }
 
-void Timer0Init(void)						//5毫秒@11.0592MHz
+static void Pca5msTimerInit(void)						//5毫秒@11.0592MHz
 {
-	AUXR |= 0x80;									//定时器时钟1T模式
-	TMOD &= 0xF0;									//设置定时器模式
-	TL0 = 0x00;		 
-	TH0 = 0x28;		 
-	TF0 = 0;											//清除TF0标志
-	TR0 = 1;											//定时器0开始计时
-	
-	ET0 = 1;
+	CR = 0;
+	CCON = 0;
+	CMOD = 0x01;									//PCA时钟Fosc/12，允许PCA溢出中断
+	CL = PCA_5MS_RELOAD_L;
+	CH = PCA_5MS_RELOAD_H;
+	CR = 1;
 }
 
-void tm0_isr() interrupt 1
+static void Timer0_Counter_Init(void)
+{
+	TR0 = 0;
+	ET0 = 0;
+	P3M0 &= ~BIT(IO_PULSE_CNT_PIN);
+	P3M1 |= BIT(IO_PULSE_CNT_PIN);  // P3.4/T0 高阻输入，硬件下降沿计数
+
+	TMOD &= 0xF0;
+	TMOD |= 0x05;  // T0: 16位外部计数器模式，P3.4/T0 下降沿计数
+	TL0 = 0x00;
+	TH0 = 0x00;
+	TF0 = 0;
+	TR0 = 1;
+}
+
+void pca_isr() interrupt 7
 {
 	static int count = 0;
+
+	if (!CF)
+	{
+		return;
+	}
+
+	CF = 0;
+	CL = PCA_5MS_RELOAD_L;
+	CH = PCA_5MS_RELOAD_H;
+	g_system_tick_5ms++;
 	
 	if (g_recv_buffer_index > 0 && g_need_process_datas == 0) 
 	{
@@ -176,9 +215,10 @@ void init_system()														//系统初始化
 	init_485_uart();  				 									//初始化串口2, 9600,8,n,1
 	adc_sensor_init(); 														//初始化ADC
 	uart_adc_init(); 																//初始化ADC串口
-	Timer0Init();              									//定时器0用于485串口接收超时判断
+	Timer0_Counter_Init();              						//定时器0用于P3.4/T0外部脉冲计数
+	Pca5msTimerInit();              							//PCA用于485串口接收5ms超时判断
 
-//	send_buffer("run...\r\n",8);   						//调试用	
+//	send_buffer("run...\r\n",8);   						//调试用
 //	debug_out("485 system run ... \r\n\0");  	//调试串口输出 调试信息
 	WDT_CONTR = 0x26;          								//开启看门狗   
 }

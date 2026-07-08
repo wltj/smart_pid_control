@@ -1,7 +1,5 @@
-﻿#ifndef _MODBUS_REG_CONFIG_H_
+#ifndef _MODBUS_REG_CONFIG_H_
 #define _MODBUS_REG_CONFIG_H_
-
-#include <stdint.h>
 
 /*============================================================================
  * 1. 线圈 (DO / 0x 地址) —— 功能码: 01(读), 05(单写), 0F(批量写)
@@ -135,6 +133,15 @@
 #define DI_COUNT            16    // 离散输入数量 (偏移0~21)
 #define INPUT_REG_COUNT     32    // 输入寄存器数量 (偏移0~27，0~9为已校准值，20~27为原始采集值)
 #define HOLDING_REG_COUNT   217   // 保持寄存器数量 (偏移0~216)
+
+/*============================================================================
+ * 全局变量声明（定义在 alarm_manager.c / main.c 中）
+ *============================================================================*/
+extern volatile unsigned char  xdata g_coils[COIL_COUNT];
+extern volatile unsigned char  xdata g_discrete_inputs[DI_COUNT];
+extern volatile unsigned short xdata g_input_regs[INPUT_REG_COUNT];
+extern volatile unsigned short xdata g_holding_regs[HOLDING_REG_COUNT];
+extern volatile unsigned int   xdata g_system_tick_5ms;
 
 #endif /* _MODBUS_REG_CONFIG_H_ */
 
