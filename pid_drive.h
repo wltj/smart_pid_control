@@ -28,4 +28,5 @@ void PID_Reset(PID_Handle_t xdata *pid);
 int32_t PID_Calc(PID_Handle_t xdata *pid, int32_t measurement, uint16_t dt);
 void PID_Hardware_Init(void);
 void PID_RunLoop(void);
+void Modbus_Input_Reg_Update(void);
 #endif

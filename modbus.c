@@ -5,6 +5,7 @@
 #include "intrins.h"
 #include "eeprom.h"
 #include "board.h"
+#include "modbus_reg_config.h"
 #include <STC8A8K64D4.H>
 
 #define FUNCTION_READ_COILS_1                 1     			//读线圈，功能码 1
@@ -90,6 +91,11 @@ int write_multiple_coils(unsigned short start_address,unsigned short value,unsig
 */
 int write_single_register(unsigned short address,unsigned short value)	//写单个保持寄存器
 {
+	if (address < HOLDING_REG_COUNT)
+	{
+		g_holding_regs[address] = value;
+		return 1;
+	}
 	
 //	sprintf(msg,"write_single_register()\r\n\0");
 //	debug_out(msg);
@@ -107,6 +113,11 @@ int write_single_register(unsigned short address,unsigned short value)	//写单�
 
 int write_single_coil(unsigned short address,unsigned short value)	//写单个线圈
 {
+	if (address < COIL_COUNT)
+	{
+		g_coils[address] = (value > 0) ? 1 : 0;
+		return 1;
+	}
 		
 //	sprintf(msg,"write_single_coil()\r\n\0");
 //	debug_out(msg);
@@ -180,6 +191,13 @@ int function_READ_COILS_1(unsigned char *buf,int len) 				//读线圈，功能�
 		var2 = 0;
 		for (i = 0; i < 8; i++) 
 		{
+			if ((start_address + i) < COIL_COUNT)
+			{
+				if (g_coils[start_address + i] > 0)
+				{
+					var2 |= 1 << i;
+				}
+			}
 			if (start_address+i == 0x000) 
 			{
 				if (Out1 > 0) 
@@ -270,6 +288,13 @@ int function_READ_DISCREATE_INPUT_2(unsigned char *buf,int len)			//读离散量
 //		}
 		for (i = 0; i < 8; i++) 
 		{
+			if ((start_address + i) < DI_COUNT)
+			{
+				if (g_discrete_inputs[start_address + i] > 0)
+				{
+					var |= 1 << i;
+				}
+			}
 			if (start_address+i == 0x100) 
 			{
 				if (In1 > 0) 
@@ -352,6 +377,11 @@ int function_READ_HOLDING_REGISTERS_3(unsigned char *buf,int len)		//读保持�
 	while (count--) 
 	{
 		sendValue = 0;
+
+		if (start_address < HOLDING_REG_COUNT)
+		{
+			sendValue = g_holding_regs[start_address];
+		}
 	
 		if (start_address == 0x402) 			//读保持寄存器的值
 		{
@@ -427,6 +457,11 @@ int function_READ_INPUT_REGISTERS_4(unsigned char *buf,int len)				//读输入�
 	while (count--) 
 	{
 		sendValue = 0;
+
+		if (start_address < INPUT_REG_COUNT)
+		{
+			sendValue = g_input_regs[start_address];
+		}
 	
 		if (start_address == 0x300) 			//读输入寄存器的值
 		{

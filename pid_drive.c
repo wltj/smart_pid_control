@@ -251,7 +251,7 @@ void Modbus_Input_Reg_Update(void)
     // 读取原始 ADC 值 (内部ADC先采样，再读UART ADC)
     adc_sensor_read_all();
     // 30020~30027: 原始采集值 (不做任何换算)
-    g_input_regs[RAW_IR_VOLT_OFFSET]  = uart_adc_get_voltage();
+    g_input_regs[RAW_IR_VOLT_OFFSET]  = 200; uart_adc_get_voltage();
     g_input_regs[RAW_IR_CURR_OFFSET]  = uart_adc_get_current();
     g_input_regs[RAW_IR_TEMP1_OFFSET] = adc_sensor_get_temp1();
     g_input_regs[RAW_IR_TEMP2_OFFSET] = adc_sensor_get_temp2();

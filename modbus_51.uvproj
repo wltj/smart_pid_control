@@ -421,6 +421,11 @@
               <FileType>1</FileType>
               <FilePath>.\pid_drive.c</FilePath>
             </File>
+            <File>
+              <FileName>modbus_comm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\modbus_comm.c</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>
