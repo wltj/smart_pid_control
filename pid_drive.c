@@ -276,7 +276,7 @@ void Modbus_Input_Reg_Update(void)
         g_holding_regs[HLD_EXT1_ZERO_OFFSET], g_holding_regs[HLD_EXT1_FULL_OFFSET]);
     g_input_regs[REG_EXT_ADC2_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_EXT2_OFFSET],
         g_holding_regs[HLD_EXT2_ZERO_OFFSET], g_holding_regs[HLD_EXT2_FULL_OFFSET]);
-    // REG_WORK_FREQ_OFFSET(0) 由 Timer1 中断维护
+    // REG_WORK_FREQ_OFFSET(0) 由 main.c 中 Freq_Measure_Update() 维护
     // REG_REAL_POWER_OFFSET(3): 实时功率 P = U * I
     {
         uint32_t power = (uint32_t)g_input_regs[REG_DC_VOLT_OFFSET] * (uint32_t)g_input_regs[REG_DC_CURR_OFFSET];

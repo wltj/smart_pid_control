@@ -263,6 +263,34 @@ static void Timer0_Counter_Init(void)
 }
 
 /*=========================================================================
+  频率测量更新：1秒闸门读取Timer0计数值，结果即为频率(Hz)
+  量程 0~50000Hz（16位计数器最大65535，留有余量）
+=========================================================================*/
+#define FREQ_GATE_TICKS  40   // 1秒闸门 = 200 × 5ms
+
+static void Freq_Measure_Update(void)
+{
+	static unsigned int xdata last_tick = 0;
+	unsigned int now_tick;
+	unsigned int count;
+
+	now_tick = g_system_tick_5ms;
+	if ((unsigned int)(now_tick - last_tick) < FREQ_GATE_TICKS) {
+		return;
+	}
+	last_tick += FREQ_GATE_TICKS;
+
+	TR0 = 0;                                    //暂停计数，读取计数值
+	count = ((unsigned int)TH0 << 8) | TL0;
+	TL0 = 0x00;                                 //清零计数器，开始下一周期
+	TH0 = 0x00;
+	TF0 = 0;
+	TR0 = 1;                                    //恢复计数
+
+	g_input_regs[REG_WORK_FREQ_OFFSET] = count*5; //1秒闸门，计数值即为频率(Hz)
+}
+
+/*=========================================================================
   PCA中断服务：5ms系统滴答 + 485超时判断 + 1s标志
 =========================================================================*/
 void pca_isr() interrupt 7
@@ -384,6 +412,9 @@ void system_loop(void)
 
 	/* 保持寄存器掉电保存 */
 	modbus_holding_save_process();
+
+	/* 频率测量（1秒闸门，P3.4/T0下降沿计数） */
+	Freq_Measure_Update();
 
 	/* 输入寄存器刷新（调试模式用模拟数据） */
 	if (IS_DEBUG_MODE()) {
