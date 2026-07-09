@@ -151,5 +151,11 @@ extern volatile unsigned short xdata g_input_regs[INPUT_REG_COUNT];
 extern volatile unsigned short xdata g_holding_regs[HOLDING_REG_COUNT];
 extern volatile unsigned int   xdata g_system_tick_5ms;
 
+// 进入调试模式（线圈0写ON）：01 05 00 00 FF 00 8C 0A
+// 退出调试模式（线圈0写OFF）：01 05 00 00 00 00 CD CA
+/* 调试模式：线圈0=1时进入调试模式 */
+#define DEBUG_MODE_COIL 0
+#define IS_DEBUG_MODE() (g_coils[DEBUG_MODE_COIL] == 1)
+
 #endif /* _MODBUS_REG_CONFIG_H_ */
 

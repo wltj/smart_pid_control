@@ -36,9 +36,7 @@ volatile unsigned char flag_1s = 0;         //定时器计时标志
 =========================================================================*/
 #define KEY_DEBOUNCE_TICKS 4  // 4 × 5ms = 20ms 消抖
 
-/* 调试功能开关：使用未使用的线圈0控制，1=开启调试模式，0=正常模式 */
-#define DEBUG_MODE_COIL 1
-#define IS_DEBUG_MODE() (DEBUG_MODE_COIL || (g_coils[DEBUG_MODE_COIL] == 1))
+/* IS_DEBUG_MODE 已移至 modbus_reg_config.h */
 
 static unsigned int xdata g_last_key_tick = 0;
 static unsigned char xdata g_start_key_state = 1;

@@ -96,6 +96,15 @@ void Alarm_Process(void)
     unsigned char start_state;
     unsigned char delay_ok;
 
+    /* 调试模式：屏蔽所有故障，不清除以便观察 */
+    if (IS_DEBUG_MODE()) {
+        alarm_clear_latch();
+        g_alarm_any_fault = 0;
+        alarm_update_outputs();
+        alarm_update_run_indicator();
+        return;
+    }
+
     /* 维修信号：屏蔽所有故障，复位输出和地址 */
     if (!MAINTENANCE_READ()) {
         alarm_clear_latch();

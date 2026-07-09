@@ -34,6 +34,7 @@ from pymodbus.exceptions import ModbusException
 # =============================================================================
 # 线圈 (Coils) 偏移 0~7
 COILS = {
+    '调试模式':     {'offset': 0, 'addr': 0x0000, 'desc': '调试=1,正常=0'},
     '启动/停止':    {'offset': 1, 'addr': 0x0001, 'desc': '启动=1,停止=0'},
     '分段加热使能': {'offset': 2, 'addr': 0x0002, 'desc': '分段加热启停'},
     '温度PID使能':  {'offset': 3, 'addr': 0x0003, 'desc': '温度PID启停'},

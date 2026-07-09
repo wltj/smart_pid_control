@@ -219,21 +219,6 @@ int function_READ_COILS_1(unsigned char *buf,int len) 				//读线圈，功能�
 					var2 |= 1 << i;
 				}
 			}
-			if (start_address+i == 0x000) 
-			{
-				if (Out1 > 0) 
-				{
-					var2 |= 1 << i; 
-				}
-			}
-			if (start_address+i == 0x001) 
-			{
-				if (Out2 > 0) 
-				{
-					var2 |= 1 << i; 
-				}
-			}
-		
 		}
 		
 //		for (i = 0; i < 8; i++) 
@@ -316,22 +301,6 @@ int function_READ_DISCREATE_INPUT_2(unsigned char *buf,int len)			//读离散量
 					var |= 1 << i;
 				}
 			}
-			if (start_address+i == 0x100) 
-			{
-				if (In1 > 0) 
-				{
-					var |= 1 << i; 
-				}
-			}
-		
-			if (start_address+i == 0x101) 
-			{
-				if (In2 > 0) 
-				{
-					var |= 1 << i; 
-				}
-			}
-			
 		}
 		
 //		for (i = 0; i < 8; i++) 
