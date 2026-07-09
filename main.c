@@ -8,6 +8,7 @@
 #include "board.h"
 #include "modbus_reg_config.h"
 #include "pid_drive.h"
+#include "run_control.h"
 #include "alarm_manager.h"
 #include <intrins.h>
 #include <STC8A8K64D4.H>
@@ -320,7 +321,9 @@ void pca_isr() interrupt 7
 }
 
 /*=========================================================================
-  按钮扫描（含消抖，与 Modbus 0x0001 功能一致）
+  按钮扫描（含消抖）
+  按键直接启动/停止控制，不判断 HLD_CTRL_MODE_OFFSET 控制方式，
+  直接按 HLD_CHANGE_MODE_OFFSET 控制方式运行（等同触屏模式控制）
 =========================================================================*/
 static void key_scan(void)
 {
@@ -335,7 +338,7 @@ static void key_scan(void)
 	if (raw != g_start_key_state) {
 		g_start_key_state = raw;
 		if (raw == 0) {
-			g_coils[COIL_START_STOP_OFFSET] = 1;  /* 启动 */
+			g_key_running = 1;  /* 启动 */
 		}
 	}
 
@@ -344,7 +347,7 @@ static void key_scan(void)
 	if (raw != g_stop_key_state) {
 		g_stop_key_state = raw;
 		if (raw == 0) {
-			g_coils[COIL_START_STOP_OFFSET] = 0;  /* 停止 */
+			g_key_running = 0;  /* 停止 */
 		}
 	}
 }
@@ -426,11 +429,11 @@ void system_loop(void)
 	/* 报警及外部输入处理 */
 	Alarm_Process();
 
-	/* PID运算（每100ms执行一次 = 20 × 5ms） */
+	/* 控制逻辑运算（每100ms执行一次 = 20 × 5ms） */
 	if ((unsigned int)(now_tick - last_pid_tick) >= 20)
 	{
 		last_pid_tick = now_tick;
-		PID_RunLoop();
+		Run_Control_Loop();
 	}
 
 	WDT_CONTR = 0x36;                            //喂狗

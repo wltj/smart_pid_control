@@ -20,8 +20,7 @@
 #ifndef IR_REAL_POWER_OFFSET
 #define IR_REAL_POWER_OFFSET REG_REAL_POWER_OFFSET
 #endif
-// 定点数缩放因子：Q10，放大1024倍，精度约0.001
-#define Q_SCALE 1024UL
+// 定点数缩放因子 Q_SCALE 已在 pid_drive.h 中定义
 #define Q_MUL(a,b) (((int32_t)(a) * (int32_t)(b)) / Q_SCALE)
 #define Q_DIV(a,b) (((int32_t)(a) * Q_SCALE) / (b))
 /*============================================================================
@@ -32,13 +31,6 @@ PID_Handle_t xdata g_temp_pid;
 PID_Handle_t xdata g_power_pid;
 // 系统状态（用于业务逻辑）
 static uint16_t xdata g_pwm_duty = 0;      // 当前 PWM 占空比 (0~1000 对应 0~100%)
-static int32_t xdata g_current_power = 0;  // 当前实时功率（Q10格式，单位%）
-static int32_t xdata g_current_temp = 0;   // 当前温度 T1（Q10格式，单位℃）
-// 分段加热状态
-static uint8_t xdata g_segment_running = 0;
-static uint8_t xdata g_segment_index = 0;
-static uint16_t xdata g_segment_elapsed_100ms = 0;
-static uint16_t xdata g_segment_last_tick_5ms = 0;
 /*============================================================================
  * PID 算法实现（纯整数定点版本，无浮点）
  *============================================================================*/
@@ -138,7 +130,7 @@ int32_t PID_Calc(PID_Handle_t xdata *pid, int32_t measurement, uint16_t dt)
 /*============================================================================
  * 从保持寄存器加载PID参数
  *============================================================================*/
-static void PID_LoadParams(void)
+void PID_LoadParams(void)
 {
     // ---------------- 加载温度PID参数 ----------------
     // 增益参数（放大100倍存储，转为Q10格式）
@@ -208,7 +200,7 @@ void PID_Hardware_Init(void)
 /*============================================================================
  * PWM 占空比更新函数
  *============================================================================*/
-static void Set_PWM_Duty(uint16_t duty) // duty: 0~1000 对应 0.0%~100.0%
+void Set_PWM_Duty(uint16_t duty) // duty: 0~1000 对应 0.0%~100.0%
 {
     uint16_t ccr_value;
     if (duty > 1000)
@@ -287,139 +279,29 @@ void Modbus_Input_Reg_Update(void)
 /*============================================================================
  * 数据获取函数（从 Modbus 缓存或硬件读取）
  *============================================================================*/
-static int32_t Get_Temperature(void)
+int32_t Get_Temperature(void)
 {
     // 从 30004 获取温度，单位放大100倍，转为Q10格式
     return (int32_t)g_input_regs[REG_TEMP_T1_OFFSET] * 1024 / 100;
 }
-static int32_t Get_Power(void)
+int32_t Get_Power(void)
 {
     // 从 30003 获取功率，单位放大100倍，转为Q10格式
     return (int32_t)g_input_regs[REG_REAL_POWER_OFFSET] * 1024 / 100;
 }
 // 获取目标温度
-static int32_t Get_Target_Temp(void)
+int32_t Get_Target_Temp(void)
 {
     // 保持寄存器里的温度放大100倍，转为Q10格式
     return (int32_t)g_holding_regs[HLD_TARGET_TEMP_OFFSET] * 1024 / 100;
 }
 // 获取功率设定值 (40011)
-static int32_t Get_Power_Setpoint(void)
+int32_t Get_Power_Setpoint(void)
 {
     // 保持寄存器里的功率放大100倍，转为Q10格式
     return (int32_t)g_holding_regs[HLD_POWER_SETPOINT_OFFSET] * 1024 / 100;
 }
-static void Segment_Heat_Reset(void)
-{
-    g_segment_running = 0;
-    g_segment_index = 0;
-    g_segment_elapsed_100ms = 0;
-    g_segment_last_tick_5ms = g_system_tick_5ms;
-}
-static int32_t Segment_Heat_Update(void)
-{
-    uint8_t work_no = (uint8_t)g_holding_regs[HLD_CUR_WORK_NO_OFFSET];
-    uint16_t now_tick = g_system_tick_5ms;
-    uint16_t diff_tick = now_tick - g_segment_last_tick_5ms;
-    uint16_t power;
-    uint16_t time_100ms;
-    if (g_coils[COIL_SEGMENT_HEAT_EN_OFFSET] == 0 || work_no == 0 || work_no > 5)
-    {
-        Segment_Heat_Reset();
-        return Get_Power_Setpoint();
-    }
-    if (g_segment_running == 0)
-    {
-        g_segment_running = 1;
-        g_segment_index = 1;
-        g_segment_elapsed_100ms = 0;
-        g_segment_last_tick_5ms = now_tick;
-    }
-    while (diff_tick >= 20)
-    {
-        g_segment_elapsed_100ms++;
-        g_segment_last_tick_5ms += 20;
-        diff_tick -= 20;
-    }
-    while (g_segment_index <= 5)
-    {
-        time_100ms = g_holding_regs[WORK_TIME_OFFSET(work_no, g_segment_index)];
-        if (time_100ms == 0 || g_segment_elapsed_100ms >= time_100ms)
-        {
-            g_segment_index++;
-            g_segment_elapsed_100ms = 0;
-            g_segment_last_tick_5ms = now_tick;
-            continue;
-        }
-        break;
-    }
-    if (g_segment_index > 5)
-    {
-        g_coils[COIL_SEGMENT_HEAT_EN_OFFSET] = 0;
-        g_coils[COIL_START_STOP_OFFSET] = 0;
-        Segment_Heat_Reset();
-        return 0;
-    }
-    power = g_holding_regs[WORK_POWER_OFFSET(work_no, g_segment_index)];
-    if (power > 100)
-        power = 100;
-    // 返回功率Q10格式
-    return ((int32_t)power) * 1024L;
-}
-/*============================================================================
- * PID 主运行逻辑（需周期性调用，默认每100ms）
- *============================================================================*/
-void PID_RunLoop(void)
-{
-    uint16_t dt = 100; // 默认100ms周期
-    uint8_t temp_pid_en;
-    int32_t temp_setpoint;
-    int32_t power_setpoint;
-    int32_t final_power_target;
-    int32_t pwm_output;
-    int32_t power_from_temp;
-    uint16_t duty;
-    // 从保持寄存器加载最新PID参数
-    PID_LoadParams();
-    if (g_coils[COIL_START_STOP_OFFSET] == 0)
-    {
-        Set_PWM_Duty(0);
-        PID_Reset(&g_temp_pid);
-        PID_Reset(&g_power_pid);
-        Segment_Heat_Reset();
-        return;
-    }
-    temp_pid_en = g_coils[COIL_TEMP_PID_EN_OFFSET];
-    g_current_temp = Get_Temperature();
-    g_current_power = Get_Power();
-    temp_setpoint = Get_Target_Temp();
-    power_setpoint = Segment_Heat_Update();
-    final_power_target = power_setpoint;
-    if (temp_pid_en && g_coils[COIL_SEGMENT_HEAT_EN_OFFSET] == 0)
-    {
-        g_temp_pid.setpoint = temp_setpoint;
-        // 计算温度PID输出（输出范围0~100，Q10格式，表示功率百分比）
-        power_from_temp = PID_Calc(&g_temp_pid, g_current_temp, dt);
-        // 限幅到0~100%
-        if (power_from_temp < 0)
-            power_from_temp = 0;
-        if (power_from_temp > (int32_t)100 * Q_SCALE)
-            power_from_temp = 100 * Q_SCALE;
-        final_power_target = power_from_temp;
-    }
-    g_power_pid.setpoint = final_power_target;
-    pwm_output = PID_Calc(&g_power_pid, g_current_power, dt);
-    if (pwm_output < 0)
-        pwm_output = 0;
-    if (pwm_output > (int32_t)100 * Q_SCALE)
-        pwm_output = 100 * Q_SCALE;
-    // Q10格式转0~1000占空比
-    duty = (uint16_t)(pwm_output * 10 / Q_SCALE);
-    Set_PWM_Duty(duty);
-    // 写入调节量到保持寄存器（只读，用于HMI显示，放大10倍）
-    g_holding_regs[HLD_TEMP_PID_ADJUST_OFFSET] = (uint16_t)(((uint32_t)final_power_target * 10UL) / 1024UL);
-    g_holding_regs[HLD_POWER_PID_ADJUST_OFFSET] = (uint16_t)(((uint32_t)pwm_output * 10UL) / 1024UL);
-}
+
 
 
 

@@ -422,6 +422,11 @@
               <FilePath>.\pid_drive.c</FilePath>
             </File>
             <File>
+              <FileName>run_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\run_control.c</FilePath>
+            </File>
+            <File>
               <FileName>modbus_comm.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\modbus_comm.c</FilePath>

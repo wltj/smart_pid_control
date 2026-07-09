@@ -1,6 +1,8 @@
-#ifndef _PID_DRIVE_H
-#define _PID_DRIVE_H
+#ifndef _PID_DRIVE_H_
+#define _PID_DRIVE_H_
 #include <board.h>
+// 定点数缩放因子：Q10，放大1024倍，精度约0.001
+#define Q_SCALE 1024UL
 // PID句柄结构体（纯整数版本）
 typedef struct {
     int32_t Kp;                  // 比例增益（Q10格式）
@@ -27,6 +29,13 @@ void PID_Init(PID_Handle_t xdata *pid, int32_t Kp, int32_t Ki, int32_t Kd,
 void PID_Reset(PID_Handle_t xdata *pid);
 int32_t PID_Calc(PID_Handle_t xdata *pid, int32_t measurement, uint16_t dt);
 void PID_Hardware_Init(void);
-void PID_RunLoop(void);
+void PID_LoadParams(void);
 void Modbus_Input_Reg_Update(void);
+// PWM占空比设置（duty: 0~1000 对应 0.0%~100.0%）
+void Set_PWM_Duty(uint16_t duty);
+// 数据获取（Q10格式）
+int32_t Get_Temperature(void);
+int32_t Get_Power(void);
+int32_t Get_Target_Temp(void);
+int32_t Get_Power_Setpoint(void);
 #endif
