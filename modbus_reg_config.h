@@ -18,13 +18,13 @@
  *    地址范围: 10005 ~ 10011
  *    单片机偏移直接对应协议表中的 "单片机地址偏移"
  *============================================================================*/
-#define DI_DEVICE_RUNNING_OFFSET 5     // HMI 10005 : 加热运行中 (加热=1, 待机=0)
-#define DI_WATER_TEMP_FAULT_OFFSET 6   // HMI 10006 : 水温故障 (故障弹窗)
-#define DI_WATER_PRESS_FAULT_OFFSET 7  // HMI 10007 : 水压故障
-#define DI_OVER_CURRENT_FAULT_OFFSET 8 // HMI 10008 : 过流故障
-#define DI_PHASE_LOSS_FAULT_OFFSET 9   // HMI 10009 : 缺相故障
-#define DI_VOLT_OVER_FAULT_OFFSET 10   // HMI 10010 : 电网电压超限故障 (启动2s后判断)
-#define DI_FREQ_OVER_FAULT_OFFSET 11   // HMI 10011 : 频率超限故障 (启动2s后判断)
+#define DI_DEVICE_RUNNING_OFFSET 0     // HMI 10000 : 加热运行中 (加热=1, 待机=0)
+#define DI_WATER_TEMP_FAULT_OFFSET 1   // HMI 10001 : 水温故障 (故障弹窗)
+#define DI_WATER_PRESS_FAULT_OFFSET 2  // HMI 10002 : 水压故障
+#define DI_OVER_CURRENT_FAULT_OFFSET 3 // HMI 10003 : 过流故障
+#define DI_PHASE_LOSS_FAULT_OFFSET 4   // HMI 10004 : 缺相故障
+#define DI_VOLT_OVER_FAULT_OFFSET 5   // HMI 10005 : 电网电压超限故障 (启动2s后判断)
+#define DI_FREQ_OVER_FAULT_OFFSET 6   // HMI 10006 : 频率超限故障 (启动2s后判断)
 
 /*============================================================================
  * 3. 输入寄存器 (3x 地址) —— 功能码: 04(读)
@@ -63,9 +63,10 @@
  *============================================================================*/
 
 /* --- 分区2：主控设定区 (偏移 1~2) --- */
-#define HLD_CTRL_MODE_OFFSET 1   // 40001 : 控制方式选择
+#define HLD_CTRL_MODE_OFFSET 1   // 40001 : 控制方式选择 触屏=1, 远程和电位器=0
 #define HLD_TARGET_TEMP_OFFSET 2 // 40002 : 目标温度
-#define HLD_POWER_SETPOINT_OFFSET 3 // 40011 : 目标功率 (0~100%)
+#define HLD_CHANGE_MODE_OFFSET 3 // 40003 : 控制模式。默认值是0，分段是1，温控是2.
+#define HLD_POWER_SETPOINT_OFFSET 11 // 40011 : 目标功率 (0~100%)
 
 /* --- 分区3：报警上下限 (偏移 21~28) --- */
 #define HLD_VOLT_LOW_OFFSET 21    // 40021 : 电压报警下限
