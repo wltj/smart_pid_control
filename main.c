@@ -426,6 +426,9 @@ void system_loop(void)
 	/* 按键扫描 */
 	key_scan();
 
+	/* 远控信号扫描（50ms防抖，短按启停/长按停止） */
+	Remote_Control_Scan();
+
 	/* 报警及外部输入处理 */
 	Alarm_Process();
 

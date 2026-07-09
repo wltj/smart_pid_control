@@ -6,6 +6,12 @@
 // 直接按 HLD_CHANGE_MODE_OFFSET 控制方式运行（等同触屏模式控制）
 extern volatile uint8_t g_key_running;
 
+// 远控启动标志：远控信号(P5.2)短按启动置位，长按/短按停止清零
+extern volatile uint8_t g_remote_running;
+
+// 远控信号扫描（需在主循环中周期性调用，内部50ms防抖）
+void Remote_Control_Scan(void);
+
 /*============================================================================
  * 控制逻辑主循环（需周期性调用，默认每100ms）
  *
