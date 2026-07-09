@@ -387,11 +387,8 @@ void PID_RunLoop(void)
         PID_Reset(&g_temp_pid);
         PID_Reset(&g_power_pid);
         Segment_Heat_Reset();
-        g_discrete_inputs[DI_DEVICE_RUNNING_OFFSET] = 0;
         return;
     }
-    /* 任意一路启动后，设备加热运行中 */
-    g_discrete_inputs[DI_DEVICE_RUNNING_OFFSET] = 1;
     temp_pid_en = g_coils[COIL_TEMP_PID_EN_OFFSET];
     g_current_temp = Get_Temperature();
     g_current_power = Get_Power();

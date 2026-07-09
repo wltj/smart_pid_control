@@ -199,9 +199,6 @@ static void debug_simulate_data_update(void)
 	g_input_regs[REG_DC_CURR_OFFSET] = 50 + (cnt % 100);
 	g_input_regs[REG_REAL_POWER_OFFSET] = 30 + (cnt % 50);
 	g_input_regs[REG_TEMP_T1_OFFSET] = 250 + (cnt % 750);
-	g_discrete_inputs[DI_DEVICE_RUNNING_OFFSET] = (cnt % 100) > 10 ? 1 : 0;
-	// 模拟运行状态
-	g_discrete_inputs[DI_DEVICE_RUNNING_OFFSET] = (cnt % 100) > 10 ? 1 : 0;
 }
 
 /*=========================================================================
@@ -426,7 +423,7 @@ void system_loop(void)
 	/* 按键扫描 */
 	key_scan();
 
-	/* 报警处理 */
+	/* 报警及外部输入处理 */
 	Alarm_Process();
 
 	/* PID运算（每100ms执行一次 = 20 × 5ms） */

@@ -172,6 +172,7 @@ typedef signed long    int32_t;
 #define WATER_LACK_READ()       PIN_RD(IO_WATER_LACK_PORT, IO_WATER_LACK_PIN)
 #define MAINTENANCE_READ()      PIN_RD(IO_MAINTENANCE_PORT, IO_MAINTENANCE_PIN)
 #define PHASE_LOSS_DET_READ()   PIN_RD(IO_PHASE_LOSS_DET_PORT, IO_PHASE_LOSS_DET_PIN)
+#define DEVICE_RUNNING_READ()   PIN_RD(IO_WORK_STATUS_IND_PORT, IO_WORK_STATUS_IND_PIN)
 
 /*============================================================================
  * 位操作辅助宏（适用于所有I/O口）
@@ -195,10 +196,10 @@ typedef signed long    int32_t;
         (PORT) ^= BIT(PIN);   \
     } while (0)
 
-/*=========================================================================
-  外部串口采集直流电压/电流全局变量接口
-=========================================================================*/
-extern uint16_t g_dc_volt_raw; // 串口3接收直流电压原始数据
+    /*=========================================================================
+      外部串口采集直流电压/电流全局变量接口
+    =========================================================================*/
+    extern uint16_t g_dc_volt_raw; // 串口3接收直流电压原始数据
 extern uint16_t g_dc_curr_raw; // 串口4接收直流电流原始数据
 
 // 串口中断更新采样值

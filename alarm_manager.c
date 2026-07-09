@@ -110,6 +110,9 @@ void Alarm_Process(void)
         g_coils[COIL_FAULT_RESET_OFFSET] = 0;
     }
 
+    /* 工作状态由外部引脚P2.1决定：待机=1,加热=0，DI取反 */
+    g_discrete_inputs[DI_DEVICE_RUNNING_OFFSET] = DEVICE_RUNNING_READ();
+
     /* 启动状态检测（用于电压/频率 2s 延迟判断） */
     start_state = g_coils[COIL_START_STOP_OFFSET] ? 1 : 0;
     if (start_state && !last_start_state) {

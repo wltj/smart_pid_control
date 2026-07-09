@@ -18,7 +18,7 @@
  *    地址范围: 10005 ~ 10011
  *    单片机偏移直接对应协议表中的 "单片机地址偏移"
  *============================================================================*/
-#define DI_DEVICE_RUNNING_OFFSET 0     // HMI 10000 : 加热运行中 (加热=1, 待机=0)
+#define DI_DEVICE_RUNNING_OFFSET 0     // HMI 10000 : 工作状态 (加热=1, 待机=0)
 #define DI_WATER_TEMP_FAULT_OFFSET 1   // HMI 10001 : 水温故障 (故障弹窗)
 #define DI_WATER_PRESS_FAULT_OFFSET 2  // HMI 10002 : 水压故障
 #define DI_OVER_CURRENT_FAULT_OFFSET 3 // HMI 10003 : 过流故障
