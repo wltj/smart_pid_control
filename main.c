@@ -46,6 +46,44 @@ static unsigned char xdata g_stop_key_state = 1;
 /* pid_drive.c 中定义，用于刷新输入寄存器 */
 extern void Modbus_Input_Reg_Update(void);
 
+static unsigned char holding_regs_is_erased(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < HOLDING_REG_COUNT; i++) {
+		if (g_holding_regs[i] != 0xFFFF) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static void holding_regs_default_init(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < HOLDING_REG_COUNT; i++) {
+		g_holding_regs[i] = 0;
+	}
+	g_holding_regs[HLD_PARAM_MAGIC_OFFSET] = HLD_PARAM_MAGIC_VALUE;
+}
+
+static void holding_regs_load(void)
+{
+	read_params((unsigned char xdata *)g_holding_regs, HOLDING_REG_COUNT * 2);
+
+	if (g_holding_regs[HLD_PARAM_MAGIC_OFFSET] == HLD_PARAM_MAGIC_VALUE) {
+		return;
+	}
+
+	if (holding_regs_is_erased()) {
+		holding_regs_default_init();
+	} else {
+		g_holding_regs[HLD_PARAM_MAGIC_OFFSET] = HLD_PARAM_MAGIC_VALUE;
+	}
+}
+
 /*=========================================================================
   延时函数
 =========================================================================*/
@@ -299,6 +337,7 @@ void system_init(void)
 	gpio_init();   							 	//初始化IO（含报警引脚）
 	init_debug_uart();         						//初始化调试串口1,9600,8，n,1
 	debug_uart_puts("System Init\r\n");
+	holding_regs_load();
 
 	init_485_uart();  				 				//初始化串口2, 9600,8,n,1 (RS485 Modbus)
 	Timer0_Counter_Init();              			//定时器0用于P3.4/T0外部脉冲计数
@@ -308,7 +347,9 @@ void system_init(void)
 	PID_Init(&g_temp_pid, 1024, 0, 0, 0, 102400, 102400, 0);
 	PID_Init(&g_power_pid, 1024, 0, 0, 0, 102400, 102400, 0);
 
-	debug_address_test_init(); 						//上电默认初始化地址测试数据
+	if (IS_DEBUG_MODE()) {
+		debug_address_test_init(); 					//上电默认初始化地址测试数据
+	}
 
 	WDT_CONTR = 0x26;          						//开启看门狗
 }

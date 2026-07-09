@@ -96,7 +96,7 @@ void Alarm_Process(void)
     unsigned char delay_ok;
 
     /* 维修信号：屏蔽所有故障，复位输出和地址 */
-    if (MAINTENANCE_READ()) {
+    if (!MAINTENANCE_READ()) {
         alarm_clear_latch();
         g_alarm_any_fault = 0;
         alarm_update_outputs();

@@ -2,26 +2,20 @@
 #include "eeprom.h"
 #include <STC8A8K64D4.H>
 
-#define S2RI  0x01          //S2CON.0
-#define S2TI  0x02          //S2CON.1
-#define ES2   0x01          //IE2.0
+#define S2RI  0x01
+#define S2TI  0x02
+#define ES2   0x01
 
-/*=========================================================================
-  RS485 全局变量定义
-=========================================================================*/
 unsigned char xdata g_recv_buffer[64];
 int xdata g_recv_buffer_index = 0;
-int xdata g_need_times = 10;            //超时定时时间 10 x 5ms
-int xdata g_current_need_times = 0;     //超时实际时间
-volatile unsigned char xdata g_need_process_datas = 0;   //需要处理数据标志
+int xdata g_need_times = 10;
+int xdata g_current_need_times = 0;
+volatile unsigned char xdata g_need_process_datas = 0;
+volatile unsigned char xdata g_holding_regs_dirty = 0;
 
-/* main.c 中定义 */
 extern void Delay5ms(void);
 extern volatile unsigned int xdata g_system_tick_5ms;
 
-/*=========================================================================
-  初始化串口2, 9600,8,n,1 (RS485 Modbus)
-=========================================================================*/
 void init_485_uart(void)
 {
 	S2CON = 0x50;
@@ -31,12 +25,9 @@ void init_485_uart(void)
 	AUXR |= 0x10;
 
 	IE2 |= ES2;
-	EA = 1;    //开中断
+	EA = 1;
 }
 
-/*=========================================================================
-  UART2 中断服务：RS485 接收 + 超时判断
-=========================================================================*/
 void UART2_Isr() interrupt 8
 {
 	if (S2CON & S2RI)
@@ -53,9 +44,6 @@ void UART2_Isr() interrupt 8
 	}
 }
 
-/*=========================================================================
-  485发送数据
-=========================================================================*/
 void send_buffer(unsigned char *buf, int len)
 {
 	unsigned char ie2_backup;
@@ -75,15 +63,23 @@ void send_buffer(unsigned char *buf, int len)
 	IE2 = ie2_backup;
 }
 
-/*=========================================================================
-  保持寄存器掉电保存（周期性写入EEPROM）
-=========================================================================*/
 void modbus_holding_save_process(void)
 {
 	static unsigned int xdata last_save_tick = 0;
-	/* 每60秒保存一次保持寄存器到EEPROM */
-	if ((unsigned int)(g_system_tick_5ms - last_save_tick) >= 12000) {
+	unsigned char need_save;
+
+	need_save = 0;
+	if (g_holding_regs_dirty) {
+		need_save = 1;
+	} else if ((unsigned int)(g_system_tick_5ms - last_save_tick) >= 1200) {
+		need_save = 1;
+	}
+
+	if (need_save) {
 		last_save_tick = g_system_tick_5ms;
-		save_params((unsigned char xdata *)g_holding_regs, HOLDING_REG_COUNT * 2);
+		g_holding_regs[HLD_PARAM_MAGIC_OFFSET] = HLD_PARAM_MAGIC_VALUE;
+		if (save_params((unsigned char xdata *)g_holding_regs, HOLDING_REG_COUNT * 2) == 1) {
+			g_holding_regs_dirty = 0;
+		}
 	}
 }

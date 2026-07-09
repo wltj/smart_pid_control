@@ -34,6 +34,7 @@ unsigned char xdata send_modbus_buffer[256];
 unsigned char xdata localbuf[256];
 char xdata msg[64];
 int xdata send_modbus_buf_count = 0;
+extern volatile unsigned char xdata g_holding_regs_dirty;
 
 void send_buffer(unsigned char *buf,int len);
 
@@ -89,11 +90,42 @@ int write_multiple_coils(unsigned short start_address,unsigned short value,unsig
 	return 1;
 }
 */
+int write_multiple_register(unsigned short start_address,unsigned short value,unsigned char *localbuf,unsigned char localbufLength)
+{
+	unsigned char index;
+	unsigned short reg_value;
+	unsigned short address;
+
+	if (value == 0 || localbufLength != (unsigned char)(value * 2)) {
+		return 0;
+	}
+
+	if (start_address >= HOLDING_REG_COUNT) {
+		return 0;
+	}
+
+	if (value > (HOLDING_REG_COUNT - start_address)) {
+		return 0;
+	}
+
+	for (index = 0; index < value; index++) {
+		address = start_address + index;
+		reg_value = ((unsigned short)localbuf[index * 2] << 8) + localbuf[index * 2 + 1];
+		g_holding_regs[address] = reg_value;
+	}
+
+	g_holding_regs[HLD_PARAM_MAGIC_OFFSET] = HLD_PARAM_MAGIC_VALUE;
+	g_holding_regs_dirty = 1;
+	return 1;
+}
+
 int write_single_register(unsigned short address,unsigned short value)	//写单个保持寄存器
 {
 	if (address < HOLDING_REG_COUNT)
 	{
 		g_holding_regs[address] = value;
+		g_holding_regs[HLD_PARAM_MAGIC_OFFSET] = HLD_PARAM_MAGIC_VALUE;
+		g_holding_regs_dirty = 1;
 		return 1;
 	}
 	
@@ -625,13 +657,14 @@ int function_WRITE_MULTIPLE_COILS_F(unsigned char *buf,int len)				//写多个�
 	debug_out("function_WRITE_MULTIPLE_COILS_F\r\n\0");
 	return ret;
 }
+*/
 
 int function_WRITE_MULTIPLE_REGISTERS_10(unsigned char *buf,int len)			//写多个寄存器,功能码 0x10
 {
-  int ret = 1;
+	int ret = 1;
 	unsigned short crc = 0;
 	unsigned short start_address = 0;  //起始地址
-	unsigned short count = 0;          //输出量	
+	unsigned short count = 0;          //输出量
 	unsigned char localbufLength = 0;
 	unsigned char index = 0;
 
@@ -640,39 +673,37 @@ int function_WRITE_MULTIPLE_REGISTERS_10(unsigned char *buf,int len)			//写多�
 	start_address += buf[3];
 	count  = buf[4] << 8;
 	count += buf[5];
-	sprintf(msg,"addr=0x%x,count=%x\r\n\0",start_address,count);
-	debug_out(msg);
-	sprintf(msg,"addr=%u,count=%u\r\n\0",start_address,count);
-	debug_out(msg);
-	
+
 	//数量是否有效，如果无效 则发送异常码 3
 	if (count < 0x1 || count > 0x7B) {
-		send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3 
+		send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3
 		ret = 1;
-    return ret;		
+		return ret;
 	}
-	
-	//地址是否ok, 否则发送 异常码 2
-	
+
+	//地址范围检查，防止越界
+	if (start_address >= HOLDING_REG_COUNT || (start_address + count) > HOLDING_REG_COUNT) {
+		send_bad_msg(buf[0],buf[1],2);   //发送 异常码 2
+		ret = 1;
+		return ret;
+	}
+
 	localbufLength = buf[6];
-	for (index = 0; index < localbufLength; index++) {
-    localbuf[index] = buf[7+index];		
+
+	//写入保持寄存器数组
+	for (index = 0; index < count; index++) {
+		g_holding_regs[start_address + index] = (buf[7 + index*2] << 8) | buf[8 + index*2];
 	}
-	//写线圈是否ok,否则发送 异常码 4
-	if (write_multiple_register(start_address,count,localbuf,localbufLength)) {
-		crc = crc16(buf,6);
-		buf[6] = crc;
-		buf[7] = crc >> 8;
-		send_buffer(buf,8);            //发送 正确数据给主机   
-	} else {
-		send_bad_msg(buf[0],buf[1],4);   //发送 异常码 4
-	}
-	ret = 1;	
-	
-	debug_out("function_WRITE_MULTIPLE_REGISTERS_10\r\n\0");
+
+	//发送正确响应（回显地址、功能码、起始地址、数量、CRC）
+	crc = crc16(buf,6);
+	buf[6] = crc;
+	buf[7] = crc >> 8;
+	send_buffer(buf,8);            //发送 正确数据给主机
+
+	ret = 1;
 	return ret;
 }
-*/
 
 /*
 int function_READ_WRITE_MULTIPLE_REGISTERS_17(unsigned char *buf,int len)			//读写多个寄存器
@@ -817,7 +848,7 @@ int parse_recv_buffer(unsigned char *buf,int len)
 		case FUNCTION_WRITE_SINGLE_REGISTER_6      : ret = function_WRITE_SINGLE_REGISTER_6(buf,len); break;      	//写单个寄存器，功能码 6
 
 //		case FUNCTION_WRITE_MULTIPLE_COILS_F       : ret = function_WRITE_MULTIPLE_COILS_F(buf,len); break;       //写多个线圈，功能码 0xf
-//		case FUNCTION_WRITE_MULTIPLE_REGISTERS_10  : ret = function_WRITE_MULTIPLE_REGISTERS_10(buf,len); break;  //写多个寄存器,功能码 0x10
+		case FUNCTION_WRITE_MULTIPLE_REGISTERS_10  : ret = function_WRITE_MULTIPLE_REGISTERS_10(buf,len); break;  //写多个寄存器,功能码 0x10
 //		case FUNCTION_READ_WRITE_MULTIPLE_REGISTERS_17  : ret = function_READ_WRITE_MULTIPLE_REGISTERS_17(buf,len); break; //读写多个寄存器		
 		default: ret = not_support_function_code(buf[0],buf[1]);        //不支持的功能码
 	}	

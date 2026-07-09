@@ -53,6 +53,10 @@
 #define RAW_IR_EXT1_OFFSET 26   // 30026 : 外部0-5V采集1 - 原始采集值
 #define RAW_IR_EXT2_OFFSET 27   // 30027 : 外部0-5V采集2 - 原始采集值
 
+/* Holding registers (4x), function 03/06/10 */
+#define HLD_PARAM_MAGIC_OFFSET 0
+#define HLD_PARAM_MAGIC_VALUE 0xA55A
+
 /*============================================================================
  * 4. 保持寄存器 (4x 地址) —— 功能码: 03(读), 06(单写), 10(批量写)
  *    HMI 与单片机双向读写，全部掉电保存
