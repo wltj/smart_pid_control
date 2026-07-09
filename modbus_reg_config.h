@@ -53,6 +53,9 @@
 #define RAW_IR_EXT1_OFFSET 26   // 30026 : 外部0-5V采集1 - 原始采集值
 #define RAW_IR_EXT2_OFFSET 27   // 30027 : 外部0-5V采集2 - 原始采集值
 
+/* 30028 : EEPROM保存状态（调试用） */
+#define REG_EEPROM_SAVE_STATUS_OFFSET 28  // 0=空闲, 1=正在保存, 2=保存成功, 3=保存失败
+
 /* Holding registers (4x), function 03/06/10 */
 #define HLD_PARAM_MAGIC_OFFSET 0
 #define HLD_PARAM_MAGIC_VALUE 0xA55A
@@ -105,23 +108,23 @@
 /* 当前选中工件编号 (偏移 101 -> HMI 40101) */
 #define HLD_CUR_WORK_NO_OFFSET 101 // 值范围 0~5 (0表示无选中)
 
-/* ---- PID参数 (温度PID) 偏移 200~206 ---- */
-#define HLD_TEMP_PID_SAMPLE_TIME_OFFSET 200 // 采样时间
-#define HLD_TEMP_PID_MAX_RISE_OFFSET 201    // 最大上升率
-#define HLD_TEMP_PID_PROP_GAIN_OFFSET 202   // 比例增益
-#define HLD_TEMP_PID_INT_GAIN_OFFSET 203    // 积分增益
-#define HLD_TEMP_PID_DER_GAIN_OFFSET 204    // 微分增益
-#define HLD_TEMP_PID_FILTER_OFFSET 205      // 滤波
-#define HLD_TEMP_PID_ADJUST_OFFSET 206      // 调节量
+/* ---- PID参数 (温度PID) 偏移 102~108 ---- */
+#define HLD_TEMP_PID_SAMPLE_TIME_OFFSET 102 // 采样时间
+#define HLD_TEMP_PID_MAX_RISE_OFFSET 103    // 最大上升率
+#define HLD_TEMP_PID_PROP_GAIN_OFFSET 104   // 比例增益
+#define HLD_TEMP_PID_INT_GAIN_OFFSET 105    // 积分增益
+#define HLD_TEMP_PID_DER_GAIN_OFFSET 106    // 微分增益
+#define HLD_TEMP_PID_FILTER_OFFSET 107      // 滤波
+#define HLD_TEMP_PID_ADJUST_OFFSET 108      // 调节量
 
-/* ---- PID参数 (功率PID) 偏移 210~216 ---- */
-#define HLD_POWER_PID_SAMPLE_TIME_OFFSET 210 // 采样时间
-#define HLD_POWER_PID_MAX_RISE_OFFSET 211    // 最大上升率
-#define HLD_POWER_PID_PROP_GAIN_OFFSET 212   // 比例增益
-#define HLD_POWER_PID_INT_GAIN_OFFSET 213    // 积分增益
-#define HLD_POWER_PID_DER_GAIN_OFFSET 214    // 微分增益
-#define HLD_POWER_PID_FILTER_OFFSET 215      // 滤波
-#define HLD_POWER_PID_ADJUST_OFFSET 216      // 调节量
+/* ---- PID参数 (功率PID) 偏移 110~116 ---- */
+#define HLD_POWER_PID_SAMPLE_TIME_OFFSET 110 // 采样时间
+#define HLD_POWER_PID_MAX_RISE_OFFSET 111    // 最大上升率
+#define HLD_POWER_PID_PROP_GAIN_OFFSET 112   // 比例增益
+#define HLD_POWER_PID_INT_GAIN_OFFSET 113    // 积分增益
+#define HLD_POWER_PID_DER_GAIN_OFFSET 114    // 微分增益
+#define HLD_POWER_PID_FILTER_OFFSET 115      // 滤波
+#define HLD_POWER_PID_ADJUST_OFFSET 116      // 调节量
 
 /*============================================================================
  * 辅助宏：将偏移转换为标准 Modbus PLC 地址 (用于调试或HMI侧核对)
@@ -137,7 +140,7 @@
 #define COIL_COUNT          8     // 线圈数量 (偏移0~6，偏移0未使用)
 #define DI_COUNT            16    // 离散输入数量 (偏移0~21)
 #define INPUT_REG_COUNT     32    // 输入寄存器数量 (偏移0~27，0~9为已校准值，20~27为原始采集值)
-#define HOLDING_REG_COUNT   217   // 保持寄存器数量 (偏移0~216)
+#define HOLDING_REG_COUNT   117   // 保持寄存器数量 (偏移0~116)
 
 /*============================================================================
  * 全局变量声明（定义在 alarm_manager.c / main.c 中）

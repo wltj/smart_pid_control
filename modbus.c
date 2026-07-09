@@ -128,19 +128,8 @@ int write_single_register(unsigned short address,unsigned short value)	//写单�
 		g_holding_regs_dirty = 1;
 		return 1;
 	}
-	
-//	sprintf(msg,"write_single_register()\r\n\0");
-//	debug_out(msg);
-//	sprintf(msg,"start_address=%u,value=%u\r\n\0",address,value);
-//	debug_out(msg);
-	//P2 = value;
-	
-	if (address == 0x400) 
-	{
-	  var1	= value;
-	}
-	
-	return 1;
+
+	return 0;
 }
 
 int write_single_coil(unsigned short address,unsigned short value)	//写单个线圈
@@ -397,9 +386,13 @@ int function_READ_HOLDING_REGISTERS_3(unsigned char *buf,int len)		//读保持�
 		ret = 1;
     return ret;		
 	}
-	
-	//地址是否ok,地址+输出数量是否ok,否则发送 异常码 2
-	
+
+	if (start_address >= HOLDING_REG_COUNT || (start_address + count) > HOLDING_REG_COUNT) {
+		send_bad_msg(buf[0],buf[1],2);   //发送 异常码 2
+		ret = 1;
+		return ret;
+	}
+
 	//读取寄存器是否ok,否则发送 异常码 4
 	
 	send_modbus_buf_count = 0;
@@ -615,9 +608,8 @@ int function_WRITE_MULTIPLE_COILS_F(unsigned char *buf,int len)				//写多个�
   int ret = 1;
 	unsigned short crc = 0;
 	unsigned short start_address = 0;  //起始地址
-	unsigned short count = 0;          //输出量	
+	unsigned short count = 0;          //输出量
 	unsigned char localbufLength = 0;
-	unsigned char index = 0;
 	
 	//输入的起始地址和输出的数量
 	start_address  = buf[2] << 8;
@@ -666,7 +658,6 @@ int function_WRITE_MULTIPLE_REGISTERS_10(unsigned char *buf,int len)			//写多�
 	unsigned short start_address = 0;  //起始地址
 	unsigned short count = 0;          //输出量
 	unsigned char localbufLength = 0;
-	unsigned char index = 0;
 
 	//输入的起始地址和输出的数量
 	start_address  = buf[2] << 8;
@@ -690,9 +681,16 @@ int function_WRITE_MULTIPLE_REGISTERS_10(unsigned char *buf,int len)			//写多�
 
 	localbufLength = buf[6];
 
-	//写入保持寄存器数组
-	for (index = 0; index < count; index++) {
-		g_holding_regs[start_address + index] = (buf[7 + index*2] << 8) | buf[8 + index*2];
+	if (localbufLength != (unsigned char)(count * 2)) {
+		send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3
+		ret = 1;
+		return ret;
+	}
+
+	if (!write_multiple_register(start_address,count,&buf[7],localbufLength)) {
+		send_bad_msg(buf[0],buf[1],4);   //发送 异常码 4
+		ret = 1;
+		return ret;
 	}
 
 	//发送正确响应（回显地址、功能码、起始地址、数量、CRC）

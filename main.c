@@ -37,7 +37,7 @@ volatile unsigned char flag_1s = 0;         //定时器计时标志
 #define KEY_DEBOUNCE_TICKS 4  // 4 × 5ms = 20ms 消抖
 
 /* 调试功能开关：使用未使用的线圈0控制，1=开启调试模式，0=正常模式 */
-#define DEBUG_MODE_COIL 0
+#define DEBUG_MODE_COIL 1
 #define IS_DEBUG_MODE() (DEBUG_MODE_COIL || (g_coils[DEBUG_MODE_COIL] == 1))
 
 static unsigned int xdata g_last_key_tick = 0;
@@ -160,9 +160,9 @@ static void debug_address_test_init(void)
 			g_holding_regs[i] = 2000 + i;
 		}
 	}
-	// 离散输入：偏移x写入1
+	// 离散输入：全部清零（无故障）
 	for (i = 0; i < DI_COUNT; i++) {
-		g_discrete_inputs[i] = 1;
+		g_discrete_inputs[i] = 0;
 	}
 	for (i = 0; i < HOLDING_REG_COUNT; i++) {
 		if (g_holding_regs[i] == 0 || g_holding_regs[i] == 0xFFFF) {
@@ -177,29 +177,15 @@ static void debug_address_test_init(void)
 =========================================================================*/
 static void debug_simulate_data_update(void)
 {
-	static uint16_t cnt = 0;
-	cnt++;
-	// 模拟工作频率：30~50Hz动态变化
-	g_input_regs[REG_WORK_FREQ_OFFSET] = 30 + (cnt % 20);
-	// 模拟直流电压：300~320V动态变化
-	g_input_regs[REG_DC_VOLT_OFFSET] = 3000 + (cnt % 200);
-	// 模拟直流电流：5~15A动态变化
-	g_input_regs[REG_DC_CURR_OFFSET] = 50 + (cnt % 100);
-	// 模拟实时功率：30%~80%动态变化
-	g_input_regs[REG_REAL_POWER_OFFSET] = 30 + (cnt % 50);
-	// 模拟温度T1-T4：25~100℃动态变化
-	g_input_regs[REG_TEMP_T1_OFFSET] = 250 + (cnt % 750);
-	g_input_regs[REG_TEMP_T2_OFFSET] = 300 + (cnt % 700);
-	g_input_regs[REG_TEMP_T3_OFFSET] = 350 + (cnt % 650);
-	g_input_regs[REG_TEMP_T4_OFFSET] = 400 + (cnt % 600);
-	// 模拟外部ADC输入
-	g_input_regs[REG_EXT_ADC1_OFFSET] = 100 + (cnt % 400);
-	g_input_regs[REG_EXT_ADC2_OFFSET] = 200 + (cnt % 300);
-	g_input_regs[REG_WORK_FREQ_OFFSET] = 30 + (cnt % 20);
-	g_input_regs[REG_DC_VOLT_OFFSET] = 3000 + (cnt % 200);
-	g_input_regs[REG_DC_CURR_OFFSET] = 50 + (cnt % 100);
-	g_input_regs[REG_REAL_POWER_OFFSET] = 30 + (cnt % 50);
-	g_input_regs[REG_TEMP_T1_OFFSET] = 250 + (cnt % 750);
+	uint8_t i;
+	/* 输入寄存器：值=偏移地址，方便核对 */
+	for (i = 0; i < INPUT_REG_COUNT; i++) {
+		if (i < 2) {
+			g_input_regs[i] = 660 + i;
+		} else {
+			g_input_regs[i] = i;
+		}
+	}
 }
 
 /*=========================================================================

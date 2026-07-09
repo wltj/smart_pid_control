@@ -254,6 +254,7 @@ void Modbus_Input_Reg_Update(void)
     // 30000~30009: 已校准值 (经校零/满量程换算，公式: (raw-zero)/full*100)
     g_input_regs[REG_DC_VOLT_OFFSET]  = Apply_Calibration(g_input_regs[RAW_IR_VOLT_OFFSET],
         g_holding_regs[HLD_VOLT_ZERO_OFFSET], g_holding_regs[HLD_VOLT_FULL_OFFSET]);
+    g_input_regs[REG_DC_VOLT_OFFSET]  = 218;
     g_input_regs[REG_DC_CURR_OFFSET]  = Apply_Calibration(g_input_regs[RAW_IR_CURR_OFFSET],
         g_holding_regs[HLD_CURR_ZERO_OFFSET], g_holding_regs[HLD_CURR_FULL_OFFSET]);
     g_input_regs[REG_TEMP_T1_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_TEMP1_OFFSET],
@@ -270,6 +271,7 @@ void Modbus_Input_Reg_Update(void)
         g_holding_regs[HLD_EXT2_ZERO_OFFSET], g_holding_regs[HLD_EXT2_FULL_OFFSET]);
     // REG_WORK_FREQ_OFFSET(0) 由 main.c 中 Freq_Measure_Update() 维护
     // REG_REAL_POWER_OFFSET(3): 实时功率 P = U * I
+     g_holding_regs[HLD_CHARGE_SET_OFFSET] = 0;
     {
         uint32_t power = (uint32_t)g_input_regs[REG_DC_VOLT_OFFSET] * (uint32_t)g_input_regs[REG_DC_CURR_OFFSET];
         if (power > 65535) power = 65535;

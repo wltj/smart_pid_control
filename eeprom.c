@@ -1,18 +1,13 @@
 #include "eeprom.h"
 #include <intrins.h>
+#include <STC8A8K64D4.H>
 
-#define IAP_ADDRESS 0x0400
+#define IAP_ADDRESS 0x0000
 
 typedef unsigned char BYTE;
 typedef unsigned int WORD;
 
-/*Declare SFR associated with the IAP */
-sfr IAP_DATA    =   0xC2;           //Flash data register
-sfr IAP_ADDRH   =   0xC3;           //Flash address HIGH
-sfr IAP_ADDRL   =   0xC4;           //Flash address LOW
-sfr IAP_CMD     =   0xC5;           //Flash command register
-sfr IAP_TRIG    =   0xC6;           //Flash command trigger
-sfr IAP_CONTR   =   0xC7;           //Flash control register
+/* IAP SFR 由 STC8A8K64D4.H 定义，无需手动声明 */
 
 /*Define ISP/IAP/EEPROM operation const for IAP_CONTR*/
 //#define ENABLE_IAP 0x80           //if SYSCLK<30MHz
@@ -29,6 +24,9 @@ sfr IAP_CONTR   =   0xC7;           //Flash control register
 #define CMD_READ    1               //Byte-Read
 #define CMD_PROGRAM 2               //Byte-Program
 #define CMD_ERASE   3               //Sector-Erase
+
+/* STC8A8K64D4 专用：IAP_TPS 设置 EEPROM 擦写等待时间，值为 CPU 主频 MHz */
+#define IAP_TPS_VALUE  11           // 11.0592MHz -> 取 11
 
 
 
@@ -66,19 +64,22 @@ Output:Flash data
 ----------------------------*/
 BYTE IapReadByte(WORD addr)
 {
-    BYTE dat;                       //Data buffer
+    BYTE dat;
 
-    IAP_CONTR = ENABLE_IAP;         //Open IAP function, and set wait time
-    IAP_CMD = CMD_READ;             //Set ISP/IAP/EEPROM READ command
-    IAP_ADDRL = addr;               //Set ISP/IAP/EEPROM address low
-    IAP_ADDRH = addr >> 8;          //Set ISP/IAP/EEPROM address high
-    IAP_TRIG = 0x5a;                //Send trigger command1 (0x5a)
-    IAP_TRIG = 0xa5;                //Send trigger command2 (0xa5)
-    _nop_();                        //MCU will hold here until ISP/IAP/EEPROM operation complete
-    dat = IAP_DATA;                 //Read ISP/IAP/EEPROM data
-    IapIdle();                      //Close ISP/IAP/EEPROM function
+    EA = 0;                         //关闭中断，防止IAP触发序列被打断
+    IAP_TPS = IAP_TPS_VALUE;         //设置 EEPROM 擦写等待时间（STC8A8K64D4 专用）
+    IAP_CONTR = ENABLE_IAP;
+    IAP_CMD = CMD_READ;
+    IAP_ADDRL = addr;
+    IAP_ADDRH = addr >> 8;
+    IAP_TRIG = 0x5a;
+    IAP_TRIG = 0xa5;
+    _nop_();
+    dat = IAP_DATA;
+    EA = 1;                          //恢复中断
+    IapIdle();
 
-    return dat;                     //Return Flash data
+    return dat;
 }
 
 /*----------------------------
@@ -89,14 +90,17 @@ Output:-
 ----------------------------*/
 void IapProgramByte(WORD addr, BYTE dat)
 {
-    IAP_CONTR = ENABLE_IAP;         //Open IAP function, and set wait time
-    IAP_CMD = CMD_PROGRAM;          //Set ISP/IAP/EEPROM PROGRAM command
-    IAP_ADDRL = addr;               //Set ISP/IAP/EEPROM address low
-    IAP_ADDRH = addr >> 8;          //Set ISP/IAP/EEPROM address high
-    IAP_DATA = dat;                 //Write ISP/IAP/EEPROM data
-    IAP_TRIG = 0x5a;                //Send trigger command1 (0x5a)
-    IAP_TRIG = 0xa5;                //Send trigger command2 (0xa5)
-    _nop_();                        //MCU will hold here until ISP/IAP/EEPROM operation complete
+    EA = 0;                         //关闭中断，防止IAP触发序列被打断
+    IAP_TPS = IAP_TPS_VALUE;         //设置 EEPROM 擦写等待时间（STC8A8K64D4 专用）
+    IAP_CONTR = ENABLE_IAP;
+    IAP_CMD = CMD_PROGRAM;
+    IAP_ADDRL = addr;
+    IAP_ADDRH = addr >> 8;
+    IAP_DATA = dat;
+    IAP_TRIG = 0x5a;
+    IAP_TRIG = 0xa5;
+    _nop_();
+    EA = 1;                          //恢复中断
     IapIdle();
 }
 
@@ -107,13 +111,16 @@ Output:-
 ----------------------------*/
 void IapEraseSector(WORD addr)
 {
-    IAP_CONTR = ENABLE_IAP;         //Open IAP function, and set wait time
-    IAP_CMD = CMD_ERASE;            //Set ISP/IAP/EEPROM ERASE command
-    IAP_ADDRL = addr;               //Set ISP/IAP/EEPROM address low
-    IAP_ADDRH = addr >> 8;          //Set ISP/IAP/EEPROM address high
-    IAP_TRIG = 0x5a;                //Send trigger command1 (0x5a)
-    IAP_TRIG = 0xa5;                //Send trigger command2 (0xa5)
-    _nop_();                        //MCU will hold here until ISP/IAP/EEPROM operation complete
+    EA = 0;                         //关闭中断，防止IAP触发序列被打断
+    IAP_TPS = IAP_TPS_VALUE;         //设置 EEPROM 擦写等待时间（STC8A8K64D4 专用）
+    IAP_CONTR = ENABLE_IAP;
+    IAP_CMD = CMD_ERASE;
+    IAP_ADDRL = addr;
+    IAP_ADDRH = addr >> 8;
+    IAP_TRIG = 0x5a;
+    IAP_TRIG = 0xa5;
+    _nop_();
+    EA = 1;                          //恢复中断
     IapIdle();
 }
 
@@ -133,21 +140,27 @@ int read_params(unsigned char *buf,int len)
 int save_params(unsigned char *buf,int len)
 {
 	int i;
-	IapEraseSector(IAP_ADDRESS);    //Erase current sector
-	Delay(20);                      //Delay
-	for (i=0; i<512; i++) {          //Check whether all sector data is FF    
-     if (IapReadByte(IAP_ADDRESS+i) != 0xff)
-       return 0;             //If error, break
-  }
-	for (i = 0; i < len; i++) {          //Program 512 bytes data into data flash    
-    IapProgramByte(IAP_ADDRESS+i, (BYTE)buf[i]);
-  }
-	
-	Delay(10);                      //Delay
-  for (i=0; i < len; i++) {          //Verify 512 bytes data    
-    if (IapReadByte(IAP_ADDRESS+i) != (BYTE)buf[i])
-       return -1;
-  }
-	
+
+	/* 1. 擦除扇区 */
+	IapEraseSector(IAP_ADDRESS);
+	Delay(20);
+
+	/* 2. 验证擦除结果（只检查实际使用的长度） */
+	for (i = 0; i < len; i++) {
+		if (IapReadByte(IAP_ADDRESS + i) != 0xff)
+			return 0;
+	}
+
+	/* 3. 逐字节写入，期间喂狗防复位 */
+	for (i = 0; i < len; i++) {
+		IapProgramByte(IAP_ADDRESS + i, (BYTE)buf[i]);
+	}
+
+	/* 4. 验证写入结果 */
+	for (i = 0; i < len; i++) {
+		if (IapReadByte(IAP_ADDRESS + i) != (BYTE)buf[i])
+			return -1;
+	}
+
 	return 1;
 }

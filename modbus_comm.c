@@ -65,21 +65,18 @@ void send_buffer(unsigned char *buf, int len)
 
 void modbus_holding_save_process(void)
 {
-	static unsigned int xdata last_save_tick = 0;
-	unsigned char need_save;
+	int ret;
 
-	need_save = 0;
+	/* 仅在 dirty 时保存，取消周期性保存以延长 EEPROM 寿命 */
 	if (g_holding_regs_dirty) {
-		need_save = 1;
-	} else if ((unsigned int)(g_system_tick_5ms - last_save_tick) >= 1200) {
-		need_save = 1;
-	}
-
-	if (need_save) {
-		last_save_tick = g_system_tick_5ms;
+		g_input_regs[REG_EEPROM_SAVE_STATUS_OFFSET] = 1;  /* 正在保存 */
 		g_holding_regs[HLD_PARAM_MAGIC_OFFSET] = HLD_PARAM_MAGIC_VALUE;
-		if (save_params((unsigned char xdata *)g_holding_regs, HOLDING_REG_COUNT * 2) == 1) {
+		ret = save_params((unsigned char xdata *)g_holding_regs, HOLDING_REG_COUNT * 2);
+		if (ret == 1) {
 			g_holding_regs_dirty = 0;
+			g_input_regs[REG_EEPROM_SAVE_STATUS_OFFSET] = 2;  /* 保存成功 */
+		} else {
+			g_input_regs[REG_EEPROM_SAVE_STATUS_OFFSET] = 3;  /* 保存失败 */
 		}
 	}
 }

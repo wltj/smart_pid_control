@@ -7,15 +7,21 @@ Modbus RTU 上位机 - 用于 STC8A8K64D4 控制板联调
 """
 
 import sys
+import os
 import threading
 import time
 from datetime import datetime
+
+# 自动设置 Qt 平台插件路径（解决嵌入式 Python 找不到插件的问题）
+os.environ.setdefault('QT_QPA_PLATFORM_PLUGIN_PATH',
+                      os.path.join(os.path.dirname(__import__('PyQt5').__file__),
+                                   'Qt5', 'plugins', 'platforms'))
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QTabWidget, QGroupBox, QLabel,
                              QLineEdit, QPushButton, QComboBox, QTableWidget,
                              QTableWidgetItem, QHeaderView, QSpinBox, QCheckBox,
-                             QMessageBox, QTextEdit, QSplitter, QFrame)
+                             QMessageBox, QTextEdit, QSplitter, QFrame, QInputDialog)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QFont, QColor
 
@@ -71,7 +77,8 @@ INPUT_REGS = {
 }
 IR_COUNT = 32
 
-# 保持寄存器 (HR) 偏移 0~216
+# 保持寄存器 (HR) 偏移 0~116
+HR_COUNT = 117
 HOLDING_REGS = {
     '参数魔术字':     {'offset': 0,   'addr': 40000, 'desc': '固定0xA55A'},
     '控制方式':       {'offset': 1,   'addr': 40001, 'desc': '1=触屏,0=远程'},
@@ -105,21 +112,21 @@ HOLDING_REGS = {
     'EXT2满量程':     {'offset': 46,  'addr': 40046},
     '当前工件编号':   {'offset': 101, 'addr': 40101, 'desc': '0~5'},
     # PID温度参数
-    '温控采样时间':   {'offset': 200, 'addr': 40200, 'unit': 'ms'},
-    '温控最大上升率': {'offset': 201, 'addr': 40201, 'unit': '%/s'},
-    '温控比例增益':   {'offset': 202, 'addr': 40202},
-    '温控积分增益':   {'offset': 203, 'addr': 40203},
-    '温控微分增益':   {'offset': 204, 'addr': 40204},
-    '温控滤波系数':   {'offset': 205, 'addr': 40205},
-    '温控调节量':     {'offset': 206, 'addr': 40206, 'unit': '%'},
+    '温控采样时间':   {'offset': 102, 'addr': 40102, 'unit': 'ms'},
+    '温控最大上升率': {'offset': 103, 'addr': 40103, 'unit': '%/s'},
+    '温控比例增益':   {'offset': 104, 'addr': 40104},
+    '温控积分增益':   {'offset': 105, 'addr': 40105},
+    '温控微分增益':   {'offset': 106, 'addr': 40106},
+    '温控滤波系数':   {'offset': 107, 'addr': 40107},
+    '温控调节量':     {'offset': 108, 'addr': 40108, 'unit': '%'},
     # PID功率参数
-    '功控采样时间':   {'offset': 210, 'addr': 40210, 'unit': 'ms'},
-    '功控最大上升率': {'offset': 211, 'addr': 40211, 'unit': '%/s'},
-    '功控比例增益':   {'offset': 212, 'addr': 40212},
-    '功控积分增益':   {'offset': 213, 'addr': 40213},
-    '功控微分增益':   {'offset': 214, 'addr': 40214},
-    '功控滤波系数':   {'offset': 215, 'addr': 40215},
-    '功控调节量':     {'offset': 216, 'addr': 40216, 'unit': '%'},
+    '功控采样时间':   {'offset': 110, 'addr': 40110, 'unit': 'ms'},
+    '功控最大上升率': {'offset': 111, 'addr': 40111, 'unit': '%/s'},
+    '功控比例增益':   {'offset': 112, 'addr': 40112},
+    '功控积分增益':   {'offset': 113, 'addr': 40113},
+    '功控微分增益':   {'offset': 114, 'addr': 40114},
+    '功控滤波系数':   {'offset': 115, 'addr': 40115},
+    '功控调节量':     {'offset': 116, 'addr': 40116, 'unit': '%'},
 }
 # 工艺曲线参数（5组，每组5段，每段2个寄存器：功率、时间）
 WORK_GROUPS = {}
@@ -179,7 +186,7 @@ class ModbusRtuClient(QObject):
 
     def connect(self):
         try:
-            self.client = ModbusClient(method='rtu', port=self.port,
+            self.client = ModbusClient(port=self.port,
                                        baudrate=self.baudrate,
                                        parity=self.parity,
                                        stopbits=self.stopbits,
@@ -222,7 +229,7 @@ class ModbusRtuClient(QObject):
     def read_holding_registers(self, offset, count):
         with self.lock:
             try:
-                rr = self.client.read_holding_registers(offset, count, unit=self.slave)
+                rr = self.client.read_holding_registers(offset, count=count, device_id=self.slave)
                 if not rr.isError():
                     return rr.registers
                 else:
@@ -235,7 +242,7 @@ class ModbusRtuClient(QObject):
     def write_holding_register(self, offset, value):
         with self.lock:
             try:
-                wr = self.client.write_register(offset, value, unit=self.slave)
+                wr = self.client.write_register(offset, value, device_id=self.slave)
                 if not wr.isError():
                     self.log_signal.emit(f"[WRITE] 保持寄存器 0x{offset:04X} = {value}")
                     return True
@@ -249,7 +256,7 @@ class ModbusRtuClient(QObject):
     def read_coils(self, offset, count):
         with self.lock:
             try:
-                rr = self.client.read_coils(offset, count, unit=self.slave)
+                rr = self.client.read_coils(offset, count=count, device_id=self.slave)
                 if not rr.isError():
                     return rr.bits
                 else:
@@ -262,7 +269,7 @@ class ModbusRtuClient(QObject):
     def write_coil(self, offset, value):
         with self.lock:
             try:
-                wr = self.client.write_coil(offset, value, unit=self.slave)
+                wr = self.client.write_coil(offset, value, device_id=self.slave)
                 if not wr.isError():
                     self.log_signal.emit(f"[WRITE] 线圈 0x{offset:04X} = {value}")
                     return True
@@ -276,7 +283,7 @@ class ModbusRtuClient(QObject):
     def read_discrete_inputs(self, offset, count):
         with self.lock:
             try:
-                rr = self.client.read_discrete_inputs(offset, count, unit=self.slave)
+                rr = self.client.read_discrete_inputs(offset, count=count, device_id=self.slave)
                 if not rr.isError():
                     return rr.bits
                 else:
@@ -289,7 +296,7 @@ class ModbusRtuClient(QObject):
     def read_input_registers(self, offset, count):
         with self.lock:
             try:
-                rr = self.client.read_input_registers(offset, count, unit=self.slave)
+                rr = self.client.read_input_registers(offset, count=count, device_id=self.slave)
                 if not rr.isError():
                     return rr.registers
                 else:
@@ -314,8 +321,8 @@ class ModbusRtuClient(QObject):
         regs = self.read_input_registers(0, IR_COUNT)
         if regs is not None:
             data['input_regs'] = regs
-        # 保持寄存器 —— 按计划分批，并组装为完整 217 长度列表
-        holding = [0] * 217
+        # 保持寄存器 —— 按计划分批，并组装为完整 HR_COUNT 长度列表
+        holding = [0] * HR_COUNT
         for start, count in self.holding_plan:
             regs = self.read_holding_registers(start, count)
             if regs is None:
@@ -377,6 +384,10 @@ class MainWindow(QMainWindow):
         self.btn_refresh = QPushButton("手动刷新")
         self.btn_refresh.clicked.connect(self.manual_refresh)
         tool_layout.addWidget(self.btn_refresh)
+
+        self.btn_save_test = QPushButton("掉电保存测试")
+        self.btn_save_test.clicked.connect(self.power_loss_save_test)
+        tool_layout.addWidget(self.btn_save_test)
 
         tool_layout.addStretch()
         tool_layout.addWidget(QLabel("刷新间隔(ms):"))
@@ -467,11 +478,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(group)
         val_lbl = QLabel(init_val)
         val_lbl.setAlignment(Qt.AlignCenter)
-        val_lbl.setStyleSheet("font-size: 18px; font-weight: bold;")
+        val_lbl.setStyleSheet("font-size: 25px; font-weight: bold;")
         layout.addWidget(val_lbl)
         info = QLabel(f"地址: {addr}  {unit}" if unit else f"地址: {addr}")
         info.setAlignment(Qt.AlignCenter)
-        info.setStyleSheet("color: gray; font-size: 10px;")
+        info.setStyleSheet("color: gray; font-size: 25px;")
         layout.addWidget(info)
         # 保存引用
         group.val_lbl = val_lbl
@@ -490,7 +501,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(cb)
             # 显示地址
             addr_lbl = QLabel(f"地址: 0x{info['addr']:04X}  ({info['desc']})")
-            addr_lbl.setStyleSheet("color: gray; font-size: 10px;")
+            addr_lbl.setStyleSheet("color: gray; font-size: 25px;")
             layout.addWidget(addr_lbl)
             self.coil_widgets[info['offset']] = cb
         layout.addStretch()
@@ -517,7 +528,7 @@ class MainWindow(QMainWindow):
             val_lbl.setFixedWidth(60)
             hbox.addWidget(val_lbl)
             addr_lbl = QLabel(f"地址: {info['addr']}")
-            addr_lbl.setStyleSheet("color: gray; font-size: 10px;")
+            addr_lbl.setStyleSheet("color: gray; font-size: 25px;")
             hbox.addWidget(addr_lbl)
             layout.addLayout(hbox)
             self.di_labels[info['offset']] = val_lbl
@@ -765,6 +776,84 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "提示", "设备未连接")
 
+    def power_loss_save_test(self):
+        """掉电保存测试：写入特征值到保持寄存器，读回验证，然后提示用户断电再上电"""
+        if not self.client or not self.client.running:
+            QMessageBox.warning(self, "提示", "请先连接设备")
+            return
+
+        # 使用偏移2（目标温度，40002）写入测试值
+        test_offset = 2
+        test_value = 12345
+
+        reply = QMessageBox.question(
+            self, "掉电保存测试",
+            f"即将向保持寄存器 地址{test_offset} (40002) 写入测试值 {test_value}。\n\n"
+            f"步骤：\n"
+            f"1. 点击'是'写入值\n"
+            f"2. 等待3秒让下位机保存到EEPROM\n"
+            f"3. 读回验证写入成功\n"
+            f"4. 断开下位机电源\n"
+            f"5. 重新上电后连接，检查值是否保持\n\n"
+            f"是否开始？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # 步骤1：写入
+        self.append_log(f"[掉电测试] 写入 保持寄存器[{test_offset}] = {test_value}")
+        ok = self.client.write_holding_register(test_offset, test_value)
+        if not ok:
+            QMessageBox.critical(self, "错误", "写入失败！请检查通信。")
+            return
+
+        # 步骤2：等待3秒让下位机保存到EEPROM
+        self.append_log("[掉电测试] 等待3秒，让下位机保存到EEPROM...")
+        QApplication.processEvents()
+        time.sleep(3)
+
+        # 步骤3：读取EEPROM保存状态（输入寄存器偏移28）
+        status_regs = self.client.read_input_registers(28, 1)
+        if status_regs is not None and len(status_regs) > 0:
+            save_status = status_regs[0]
+            status_text = {0: "空闲", 1: "正在保存", 2: "保存成功", 3: "保存失败"}.get(save_status, f"未知({save_status})")
+            self.append_log(f"[掉电测试] EEPROM保存状态: {status_text}")
+        else:
+            self.append_log("[掉电测试] 无法读取保存状态")
+            save_status = -1
+
+        # 步骤4：读回验证
+        regs = self.client.read_holding_registers(test_offset, 1)
+        if regs is not None and len(regs) > 0:
+            readback = regs[0]
+            self.append_log(f"[掉电测试] 读回值 = {readback}")
+            if readback == test_value:
+                if save_status == 2:
+                    QMessageBox.information(self, "验证成功",
+                        f"写入值 {test_value} 读回一致，EEPROM保存成功！\n\n"
+                        f"现在可以断开下位机电源，等待5秒后重新上电。\n"
+                        f"重新连接后，检查保持寄存器[{test_offset}]的值是否仍为 {test_value}。")
+                elif save_status == 3:
+                    QMessageBox.critical(self, "EEPROM保存失败",
+                        f"RAM读回值正确({test_value})，但EEPROM保存失败！\n\n"
+                        f"可能原因：\n"
+                        f"1. STC-ISP下载时未启用EEPROM功能\n"
+                        f"2. IAP地址不在EEPROM范围内\n"
+                        f"3. EEPROM扇区损坏\n\n"
+                        f"请检查STC-ISP下载设置中的EEPROM配置。")
+                else:
+                    QMessageBox.information(self, "验证成功",
+                        f"写入值 {test_value} 读回一致！\n\n"
+                        f"现在可以断开下位机电源，等待5秒后重新上电。\n"
+                        f"重新连接后，检查保持寄存器[{test_offset}]的值是否仍为 {test_value}。")
+            else:
+                QMessageBox.warning(self, "验证失败",
+                    f"写入值 {test_value}，但读回值 {readback}！\n"
+                    f"通信或写入逻辑有问题。")
+        else:
+            QMessageBox.critical(self, "验证失败", "读取保持寄存器失败！")
+
     def on_poll_timer(self):
         self.manual_refresh()
 
@@ -839,6 +928,8 @@ class MainWindow(QMainWindow):
 # =============================================================================
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    # 全局字体放大（影响所有控件）
+    app.setFont(QFont("Microsoft YaHei", 11))
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
