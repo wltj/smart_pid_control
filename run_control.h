@@ -1,28 +1,19 @@
 #ifndef _RUN_CONTROL_H_
 #define _RUN_CONTROL_H_
+
 #include <board.h>
 
-// 按键直接启动标志：物理启停按键置位，无视 HLD_CTRL_MODE_OFFSET
-// 直接按 HLD_CHANGE_MODE_OFFSET 控制方式运行（等同触屏模式控制）
+/* 外部启动状态，由按键扫描和远程端子扫描维护。 */
 extern volatile uint8_t g_key_running;
-
-// 远控启动标志：远控信号(P5.2)短按启动置位，长按/短按停止清零
 extern volatile uint8_t g_remote_running;
 
-// 远控信号扫描（需在主循环中周期性调用，内部50ms防抖）
+/* 扫描远程启停输入：短按切换，长按停止。 */
 void Remote_Control_Scan(void);
 
-/*============================================================================
- * 控制逻辑主循环（需周期性调用，默认每100ms）
- *
- * 触屏控制(HLD_CTRL_MODE_OFFSET=1)时才输出PWM并启动PID，
- * 否则只刷新状态数据、不启动PID。
- * 启停由 COIL_START_STOP_OFFSET 控制（启动=1, 停止=0）。
- * 控制方式由 HLD_CHANGE_MODE_OFFSET 选择：
- *   0 = 默认，按目标功率(HLD_POWER_SETPOINT_OFFSET) PID控制
- *   1 = 分段加热，按选中工件(HLD_CUR_WORK_NO_OFFSET)的功率/时间曲线加热
- *   2 = 温度加热，按目标温度(HLD_TARGET_TEMP_OFFSET) 恒温PID控制
- *============================================================================*/
-void Run_Control_Loop(void);
+/*
+ * 主运行控制循环。
+ * elapsed_ms 为距离上次调用的实际时间，用于 PID 采样周期和分段计时。
+ */
+void Run_Control_Loop(uint16_t elapsed_ms);
 
-#endif /* _RUN_CONTROL_H_ */
+#endif

@@ -374,6 +374,7 @@ void system_loop(void)
 	static unsigned int xdata last_pid_tick = 0;
 	static uint8_t debug_init_flag = 0;
 	unsigned int now_tick;
+	unsigned int elapsed_pid_ticks;
 
 	now_tick = g_system_tick_5ms;
 
@@ -419,8 +420,9 @@ void system_loop(void)
 	/* 控制逻辑运算（每100ms执行一次 = 20 × 5ms） */
 	if ((unsigned int)(now_tick - last_pid_tick) >= 20)
 	{
+		elapsed_pid_ticks = (unsigned int)(now_tick - last_pid_tick);
 		last_pid_tick = now_tick;
-		Run_Control_Loop();
+		Run_Control_Loop((uint16_t)(elapsed_pid_ticks * 5U));
 	}
 
 	WDT_CONTR = 0x36;                            //喂狗

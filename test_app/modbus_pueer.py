@@ -59,7 +59,7 @@ INPUT_REGS = {
     '工作频率':      {'offset': 0,  'addr': 30000, 'unit': 'Hz'},
     '直流电压':      {'offset': 1,  'addr': 30001, 'unit': 'V'},
     '直流电流':      {'offset': 2,  'addr': 30002, 'unit': 'A'},
-    '实时功率':      {'offset': 3,  'addr': 30003, 'unit': '%'},
+    '实时功率':      {'offset': 3,  'addr': 30003, 'unit': 'W'},
     '温度T1':        {'offset': 4,  'addr': 30004, 'unit': '℃'},
     '温度T2':        {'offset': 5,  'addr': 30005, 'unit': '℃'},
     '温度T3':        {'offset': 6,  'addr': 30006, 'unit': '℃'},
@@ -85,14 +85,14 @@ HOLDING_REGS = {
     '控制方式':       {'offset': 1,   'addr': 40001, 'desc': '1=触屏,0=远程'},
     '目标温度':       {'offset': 2,   'addr': 40002, 'unit': '℃'},
     '控制模式':       {'offset': 3,   'addr': 40003, 'desc': '0=功率,1=分段,2=温控'},
-    '目标功率':       {'offset': 11,  'addr': 40011, 'unit': '%'},
+    '目标功率':       {'offset': 11,  'addr': 40011, 'unit': 'W'},
     '电压下限':       {'offset': 21,  'addr': 40021, 'unit': 'V'},
     '电压上限':       {'offset': 22,  'addr': 40022, 'unit': 'V'},
     '频率下限':       {'offset': 23,  'addr': 40023, 'unit': 'Hz'},
     '频率上限':       {'offset': 24,  'addr': 40024, 'unit': 'Hz'},
     '温度上限':       {'offset': 25,  'addr': 40025, 'unit': '℃'},
     '温度下限':       {'offset': 26,  'addr': 40026, 'unit': '℃'},
-    '功率限制':       {'offset': 27,  'addr': 40027, 'unit': '%'},
+    '功率限制':       {'offset': 27,  'addr': 40027, 'unit': 'W'},
     '充电设置':       {'offset': 28,  'addr': 40028, 'unit': 'mV'},
     # 校准参数
     '电压校零':       {'offset': 31,  'addr': 40031},
@@ -114,12 +114,12 @@ HOLDING_REGS = {
     '当前工件编号':   {'offset': 101, 'addr': 40101, 'desc': '0~5'},
     # PID温度参数
     '温控采样时间':   {'offset': 102, 'addr': 40102, 'unit': 'ms'},
-    '温控最大上升率': {'offset': 103, 'addr': 40103, 'unit': '%/s'},
+    '温控最大上升率': {'offset': 103, 'addr': 40103, 'unit': 'W/s'},
     '温控比例增益':   {'offset': 104, 'addr': 40104},
     '温控积分增益':   {'offset': 105, 'addr': 40105},
     '温控微分增益':   {'offset': 106, 'addr': 40106},
     '温控滤波系数':   {'offset': 107, 'addr': 40107},
-    '温控调节量':     {'offset': 108, 'addr': 40108, 'unit': '%'},
+    '温控调节量':     {'offset': 108, 'addr': 40108, 'unit': 'W'},
     # PID功率参数
     '功控采样时间':   {'offset': 110, 'addr': 40110, 'unit': 'ms'},
     '功控最大上升率': {'offset': 111, 'addr': 40111, 'unit': '%/s'},
@@ -155,7 +155,7 @@ for g in range(1, 6):
     for seg in range(1, 6):
         p_off = base + (seg-1)*2
         t_off = p_off + 1
-        WORK_GROUPS[f'工件{g}段{seg}功率'] = {'offset': p_off, 'addr': 40000 + p_off, 'unit': '%'}
+        WORK_GROUPS[f'工件{g}段{seg}功率'] = {'offset': p_off, 'addr': 40000 + p_off, 'unit': 'W'}
         WORK_GROUPS[f'工件{g}段{seg}时间'] = {'offset': t_off, 'addr': 40000 + t_off, 'unit': '×100ms'}
 
 # =============================================================================
@@ -470,7 +470,7 @@ class MainWindow(QMainWindow):
         self.lbl_freq = self._create_labeled_value("工作频率", "0", "Hz", "30000")
         self.lbl_volt = self._create_labeled_value("直流电压", "0", "V", "30001")
         self.lbl_curr = self._create_labeled_value("直流电流", "0", "A", "30002")
-        self.lbl_power = self._create_labeled_value("实时功率", "0", "%", "30003")
+        self.lbl_power = self._create_labeled_value("实时功率", "0", "W", "30003")
         for lbl in [self.lbl_freq, self.lbl_volt, self.lbl_curr, self.lbl_power]:
             row1.addWidget(lbl)
         grid.addLayout(row1)

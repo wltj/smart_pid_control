@@ -3,6 +3,8 @@
 #include "uart_adc.h"
 #include "modbus_reg_config.h"
 #include "modbus.h"
+
+/* 部分工程头文件未暴露 PWMA 寄存器时，在这里补齐寄存器地址。 */
 #ifndef PWMA_CR1
 #define PWMA_CR1    (*(xdata volatile unsigned char *)0xFEC0)
 #define PWMA_CCMR1  (*(xdata volatile unsigned char *)0xFEC8)
@@ -14,28 +16,251 @@
 #define PWMA_CCR1H  (*(xdata volatile unsigned char *)0xFED5)
 #define PWMA_CCR1L  (*(xdata volatile unsigned char *)0xFED6)
 #endif
-#ifndef IR_TEMP_OFFSET
-#define IR_TEMP_OFFSET REG_EXT_ADC1_OFFSET
-#endif
-#ifndef IR_REAL_POWER_OFFSET
-#define IR_REAL_POWER_OFFSET REG_REAL_POWER_OFFSET
-#endif
-// 定点数缩放因子 Q_SCALE 已在 pid_drive.h 中定义
-#define Q_MUL(a,b) (((int32_t)(a) * (int32_t)(b)) / Q_SCALE)
-#define Q_DIV(a,b) (((int32_t)(a) * Q_SCALE) / (b))
+
+/* UART ADC 已经把 0~5V 输入转换成电压量，这里用 5 作为模拟量满刻度基准。 */
 #define ANALOG_INPUT_FULL_SCALE 5U
-/*============================================================================
- * 全局变量定义
- *============================================================================*/
-// PID 实例
+
+/* PID 增益寄存器按百分数录入：100 表示 1.00 倍。 */
+#define PID_GAIN_REG_DEFAULT 100U
+#define PID_GAIN_REG_MAX 10000U
+
+/* 最大上升率寄存器按 0.1 单位录入：100 表示 10.0 单位/秒。 */
+#define PID_MAX_RISE_DEFAULT 100U
+#define PID_MAX_RISE_MAX 1000U
+
+/* PID 采样周期保护范围，避免误写 0 或异常大值导致控制失真。 */
+#define PID_SAMPLE_DEFAULT_MS 100U
+#define PID_SAMPLE_MIN_MS 20U
+#define PID_SAMPLE_MAX_MS 5000U
+#define I32_MAX_VALUE 2147483647L
+#define I32_MIN_VALUE (-2147483647L - 1L)
+#define U32_MAX_VALUE 0xFFFFFFFFUL
+
 PID_Handle_t xdata g_temp_pid;
 PID_Handle_t xdata g_power_pid;
-// 系统状态（用于业务逻辑）
-static uint16_t xdata g_pwm_duty = 0;      // 当前 PWM 占空比 (0~1000 对应 0~100%)
-/*============================================================================
- * PID 算法实现（纯整数定点版本，无浮点）
- *============================================================================*/
-// 初始化 PID
+
+/* 当前 PWM 输出，0~1000 对应 0.0%~100.0%，用于调试和状态保持。 */
+static uint16_t xdata g_pwm_duty = 0;
+
+static int32_t Clamp_I32(int32_t value, int32_t min_value, int32_t max_value)
+{
+    if (value > max_value) return max_value;
+    if (value < min_value) return min_value;
+    return value;
+}
+
+static uint32_t Abs_I32_To_U32(int32_t value)
+{
+    if (value == I32_MIN_VALUE) return ((uint32_t)I32_MAX_VALUE + 1UL);
+    if (value < 0) return (uint32_t)(-value);
+    return (uint32_t)value;
+}
+
+static int32_t Signed_From_U32(uint32_t value, uint8_t negative)
+{
+    if (negative) {
+        if (value >= ((uint32_t)I32_MAX_VALUE + 1UL)) return I32_MIN_VALUE;
+        return -(int32_t)value;
+    }
+    if (value > (uint32_t)I32_MAX_VALUE) return I32_MAX_VALUE;
+    return (int32_t)value;
+}
+
+static uint32_t Mul_Div_U32_Sat(uint32_t value, uint32_t mul, uint32_t div)
+{
+    uint32_t high;
+    uint32_t rem;
+    uint32_t result;
+    uint32_t part;
+
+    if (div == 0) return U32_MAX_VALUE;
+
+    high = value / div;
+    rem = value % div;
+
+    if (high != 0 && mul > (U32_MAX_VALUE / high)) return U32_MAX_VALUE;
+    result = high * mul;
+
+    if (rem != 0 && mul > (U32_MAX_VALUE / rem)) return U32_MAX_VALUE;
+    part = (rem * mul) / div;
+
+    if (result > U32_MAX_VALUE - part) return U32_MAX_VALUE;
+    return result + part;
+}
+
+static int32_t PID_Mul_Div(int32_t value, uint32_t mul, uint32_t div)
+{
+    uint8_t negative;
+    uint32_t scaled;
+
+    negative = (value < 0) ? 1 : 0;
+    scaled = Mul_Div_U32_Sat(Abs_I32_To_U32(value), mul, div);
+    return Signed_From_U32(scaled, negative);
+}
+
+static int32_t PID_MulQ(int32_t a, int32_t b)
+{
+    uint8_t negative;
+    uint32_t ua;
+    uint32_t ub;
+    uint32_t high;
+    uint32_t rem;
+    uint32_t result;
+    uint32_t part;
+
+    negative = 0;
+    if (a < 0) negative ^= 1;
+    if (b < 0) negative ^= 1;
+
+    /* Q10 定点乘法拆成商和余数，降低 32 位乘法溢出的风险。 */
+    ua = Abs_I32_To_U32(a);
+    ub = Abs_I32_To_U32(b);
+    high = ua / (uint32_t)Q_SCALE;
+    rem = ua % (uint32_t)Q_SCALE;
+
+    if (high != 0 && ub > (U32_MAX_VALUE / high)) {
+        return negative ? I32_MIN_VALUE : I32_MAX_VALUE;
+    }
+    result = high * ub;
+
+    if (rem != 0 && ub > (U32_MAX_VALUE / rem)) {
+        return negative ? I32_MIN_VALUE : I32_MAX_VALUE;
+    }
+    part = (rem * ub) / (uint32_t)Q_SCALE;
+
+    if (result > U32_MAX_VALUE - part) {
+        return negative ? I32_MIN_VALUE : I32_MAX_VALUE;
+    }
+    return Signed_From_U32(result + part, negative);
+}
+
+static int32_t PID_Add_Sat(int32_t a, int32_t b)
+{
+    if (b > 0 && a > I32_MAX_VALUE - b) return I32_MAX_VALUE;
+    if (b < 0 && a < I32_MIN_VALUE - b) return I32_MIN_VALUE;
+    return a + b;
+}
+
+static int32_t PID_Apply_Rise_Limit(PID_Handle_t xdata *pid, int32_t output, uint16_t dt)
+{
+    int32_t delta;
+    int32_t delta_max;
+
+    /* 只限制上升速度，下降时立即响应，便于过温或过功率时快速回落。 */
+    delta = output - pid->prev_output;
+    if (delta <= 0) return output;
+
+    delta_max = PID_Mul_Div(pid->max_rise, dt, 1000UL);
+    if (delta > delta_max) return PID_Add_Sat(pid->prev_output, delta_max);
+    return output;
+}
+
+static void PID_Set_Output_Limits(PID_Handle_t xdata *pid, int32_t out_min, int32_t out_max, int32_t integral_limit)
+{
+    pid->output_min = out_min;
+    pid->output_max = out_max;
+    pid->integral_limit = integral_limit;
+    pid->prev_output = Clamp_I32(pid->prev_output, out_min, out_max);
+    pid->integral = Clamp_I32(pid->integral, -integral_limit, integral_limit);
+}
+
+static uint16_t Normalize_Sample_Time(uint16_t sample_ms)
+{
+    if (sample_ms == 0) return PID_SAMPLE_DEFAULT_MS;
+    if (sample_ms < PID_SAMPLE_MIN_MS) return PID_SAMPLE_MIN_MS;
+    if (sample_ms > PID_SAMPLE_MAX_MS) return PID_SAMPLE_MAX_MS;
+    return sample_ms;
+}
+
+static int32_t Gain_Reg_To_Q10(uint16_t reg_value, uint8_t zero_uses_default)
+{
+    /* Kp 的 0 使用默认 1.00，Ki/Kd 的 0 表示关闭对应环节。 */
+    if (reg_value == 0 && zero_uses_default) reg_value = PID_GAIN_REG_DEFAULT;
+    if (reg_value > PID_GAIN_REG_MAX) reg_value = PID_GAIN_REG_MAX;
+    return (int32_t)reg_value * Q_SCALE / 100L;
+}
+
+static void PID_Load_One(PID_Handle_t xdata *pid,
+                         uint16_t kp_offset,
+                         uint16_t ki_offset,
+                         uint16_t kd_offset,
+                         uint16_t max_rise_offset,
+                         uint16_t filter_offset)
+{
+    uint16_t max_rise_reg;
+
+    /* HMI 写入的 PID 参数统一转换成 Q10，PID_Calc 内部不再碰寄存器。 */
+    pid->Kp = Gain_Reg_To_Q10(g_holding_regs[kp_offset], 1);
+    pid->Ki = Gain_Reg_To_Q10(g_holding_regs[ki_offset], 0);
+    pid->Kd = Gain_Reg_To_Q10(g_holding_regs[kd_offset], 0);
+
+    max_rise_reg = g_holding_regs[max_rise_offset];
+    if (max_rise_reg == 0 || max_rise_reg > PID_MAX_RISE_MAX) {
+        max_rise_reg = PID_MAX_RISE_DEFAULT;
+    }
+    pid->max_rise = (int32_t)max_rise_reg * Q_SCALE / 10L;
+    pid->filter_coeff = (uint8_t)(g_holding_regs[filter_offset] & 0xFF);
+}
+
+static uint16_t Apply_Temperature_Calibration(uint16_t raw, int16_t zero)
+{
+    int32_t cal;
+
+    /* 温度 ADC 驱动已经换算成实际温度，这里只做零点修正，不再乘满量程。 */
+    cal = (int32_t)raw - (int32_t)zero;
+    if (cal < 0) cal = 0;
+    if (cal > 65535L) cal = 65535L;
+    return (uint16_t)cal;
+}
+
+static uint16_t Apply_Analog_Calibration(uint16_t raw, int16_t zero, uint16_t full)
+{
+    int32_t cal;
+
+    if (full == 0) return raw;
+
+    /* 其他 0~5V 模拟量：实际值 = (输入物理量 - 零点) * 满量程 / 5V。 */
+    cal = ((int32_t)raw - (int32_t)zero) * (int32_t)full / (int32_t)ANALOG_INPUT_FULL_SCALE;
+    if (cal < 0) cal = 0;
+    if (cal > 65535L) cal = 65535L;
+    return (uint16_t)cal;
+}
+
+static uint16_t Real_Power_From_VI(uint16_t voltage, uint16_t current)
+{
+    uint32_t power;
+
+    /* 30003 是真实运行功率，不是百分比；电压、电流已经各自完成满量程换算。 */
+    power = (uint32_t)voltage * (uint32_t)current;
+    if (power > 65535UL) power = 65535UL;
+    return (uint16_t)power;
+}
+
+uint16_t Get_Power_Limit_Value(void)
+{
+    uint16_t limit;
+
+    /* 40027 单位与 30003/40011 一致；写 0 表示不限制目标功率。 */
+    limit = g_holding_regs[HLD_POWER_LIMIT_OFFSET];
+    if (limit == 0) return 65535U;
+    return limit;
+}
+
+static int32_t Get_Power_Limit_Q10(void)
+{
+    return (int32_t)Get_Power_Limit_Value() * Q_SCALE;
+}
+
+uint16_t PID_Get_Temp_Sample_Time(void)
+{
+    return Normalize_Sample_Time(g_holding_regs[HLD_TEMP_PID_SAMPLE_TIME_OFFSET]);
+}
+
+uint16_t PID_Get_Power_Sample_Time(void)
+{
+    return Normalize_Sample_Time(g_holding_regs[HLD_POWER_PID_SAMPLE_TIME_OFFSET]);
+}
+
 void PID_Init(PID_Handle_t xdata *pid, int32_t Kp, int32_t Ki, int32_t Kd,
               int32_t out_min, int32_t out_max, int32_t integral_limit, uint8_t is_inc)
 {
@@ -46,203 +271,142 @@ void PID_Init(PID_Handle_t xdata *pid, int32_t Kp, int32_t Ki, int32_t Kd,
     pid->output_max = out_max;
     pid->integral_limit = integral_limit;
     pid->is_incremental = is_inc;
-    pid->max_rise = 10 * Q_SCALE; // 默认最大上升率10%/s
-    pid->filter_coeff = 0; // 默认无滤波
+    pid->max_rise = 10L * Q_SCALE;
+    pid->filter_coeff = 0;
     PID_Reset(pid);
 }
-// 重置 PID 内部状态
+
 void PID_Reset(PID_Handle_t xdata *pid)
 {
     pid->setpoint = 0;
     pid->integral = 0;
     pid->prev_error = 0;
+    pid->prev_prev_error = 0;
     pid->prev_output = 0;
     pid->prev_measured = 0;
+    pid->measured_valid = 0;
 }
-// PID 计算（位置式 + 增量式混合，带滤波和上升率限制，纯整数运算）
-// dt: 调用间隔时间（单位ms，默认100ms）
+
 int32_t PID_Calc(PID_Handle_t xdata *pid, int32_t measurement, uint16_t dt)
 {
-    int32_t error = pid->setpoint - measurement;
-    int32_t output = 0;
-    // 一阶低通滤波（整数版本）
-    if (pid->filter_coeff > 0) {
+    int32_t error;
+    int32_t output;
+    int32_t p_term;
+    int32_t i_term;
+    int32_t d_term;
+    int32_t delta_error;
+    int32_t second_error;
+    int32_t old_integral;
+    int32_t new_integral;
+    int32_t derivative;
+
+    if (dt == 0) dt = 1;
+
+    if (pid->filter_coeff > 0 && pid->measured_valid) {
         measurement = (measurement * (256 - pid->filter_coeff) + pid->prev_measured * pid->filter_coeff) / 256;
     }
     pid->prev_measured = measurement;
-    if (pid->is_incremental)
-    {
-        // ========== 增量式 PID ==========
-        int32_t p_term;
-        int32_t i_term;
-        int32_t d_term;
-        int32_t delta_max;
-        int32_t delta;
-        p_term = Q_MUL(pid->Kp, (error - pid->prev_error));
-        i_term = Q_MUL(pid->Ki, error) * dt / 1000;
-        d_term = Q_MUL(pid->Kd, (error - pid->prev_error)) * 1000 / dt;
-        output = pid->prev_output + p_term + i_term + d_term;
-        // 输出限幅
-        if (output > pid->output_max)
-            output = pid->output_max;
-        if (output < pid->output_min)
-            output = pid->output_min;
-        // 上升率限制
-        delta_max = pid->max_rise * dt / 1000;
-        delta = output - pid->prev_output;
-        if (delta > delta_max) output = pid->prev_output + delta_max;
-        else if (delta < -delta_max) output = pid->prev_output - delta_max;
-        // 更新状态
-        pid->prev_output = output;
-        pid->prev_error = error;
+    pid->measured_valid = 1;
+    error = pid->setpoint - measurement;
+
+    if (pid->is_incremental) {
+        delta_error = error - pid->prev_error;
+        second_error = error - 2L * pid->prev_error + pid->prev_prev_error;
+
+        p_term = PID_MulQ(pid->Kp, delta_error);
+        i_term = PID_MulQ(pid->Ki, PID_Mul_Div(error, dt, 1000UL));
+        d_term = PID_MulQ(pid->Kd, PID_Mul_Div(second_error, 1000UL, dt));
+        output = PID_Add_Sat(pid->prev_output, PID_Add_Sat(PID_Add_Sat(p_term, i_term), d_term));
+    } else {
+        old_integral = pid->integral;
+        new_integral = PID_Add_Sat(pid->integral, PID_Mul_Div(error, dt, 1000UL));
+        new_integral = Clamp_I32(new_integral, -pid->integral_limit, pid->integral_limit);
+        derivative = PID_Mul_Div(error - pid->prev_error, 1000UL, dt);
+
+        p_term = PID_MulQ(pid->Kp, error);
+        i_term = PID_MulQ(pid->Ki, new_integral);
+        d_term = PID_MulQ(pid->Kd, derivative);
+        output = PID_Add_Sat(PID_Add_Sat(p_term, i_term), d_term);
+
+        if ((output > pid->output_max && error > 0) ||
+            (output < pid->output_min && error < 0)) {
+            new_integral = old_integral;
+            i_term = PID_MulQ(pid->Ki, new_integral);
+            output = PID_Add_Sat(PID_Add_Sat(p_term, i_term), d_term);
+        }
+        pid->integral = new_integral;
     }
-    else
-    {
-        // ========== 位置式 PID ==========
-        int32_t derivative;
-        int32_t delta_max;
-        int32_t delta;
-        // 积分累加（带积分限幅）
-        pid->integral += Q_MUL(error, dt) / 1000;
-        if (pid->integral > pid->integral_limit)
-            pid->integral = pid->integral_limit;
-        if (pid->integral < -pid->integral_limit)
-            pid->integral = -pid->integral_limit;
-        // 微分
-        derivative = Q_MUL((error - pid->prev_error), 1000) / dt;
-        // 计算输出
-        output = Q_MUL(pid->Kp, error) + Q_MUL(pid->Ki, pid->integral) + Q_MUL(pid->Kd, derivative);
-        // 输出限幅
-        if (output > pid->output_max)
-            output = pid->output_max;
-        else if (output < pid->output_min)
-            output = pid->output_min;
-        // 上升率限制
-        delta_max = pid->max_rise * dt / 1000;
-        delta = output - pid->prev_output;
-        if (delta > delta_max) output = pid->prev_output + delta_max;
-        else if (delta < -delta_max) output = pid->prev_output - delta_max;
-        // 更新状态
-        pid->prev_output = output;
-        pid->prev_error = error;
-    }
+
+    output = Clamp_I32(output, pid->output_min, pid->output_max);
+    output = PID_Apply_Rise_Limit(pid, output, dt);
+    output = Clamp_I32(output, pid->output_min, pid->output_max);
+
+    pid->prev_prev_error = pid->prev_error;
+    pid->prev_error = error;
+    pid->prev_output = output;
     return output;
 }
-/*============================================================================
- * 从保持寄存器加载PID参数
- *============================================================================*/
+
 void PID_LoadParams(void)
 {
-    // ---------------- 加载温度PID参数 ----------------
-    // 增益参数（放大100倍存储，转为Q10格式）
-    uint16_t kp_reg;
-    uint16_t ki_reg;
-    uint16_t kd_reg;
-    uint16_t max_rise_reg;
-    kp_reg = g_holding_regs[HLD_TEMP_PID_PROP_GAIN_OFFSET];
-    ki_reg = g_holding_regs[HLD_TEMP_PID_INT_GAIN_OFFSET];
-    kd_reg = g_holding_regs[HLD_TEMP_PID_DER_GAIN_OFFSET];
-    if (kp_reg == 0 || kp_reg > 10000) kp_reg = 100; // 默认1.0
-    if (ki_reg > 10000) ki_reg = 0;
-    if (kd_reg > 10000) kd_reg = 0;
-    g_temp_pid.Kp = (int32_t)kp_reg * 1024 / 100; // 转为Q10
-    g_temp_pid.Ki = (int32_t)ki_reg * 1024 / 100;
-    g_temp_pid.Kd = (int32_t)kd_reg * 1024 / 100;
-    // 最大上升率（放大10倍存储，单位%/s，转为Q10）
-    max_rise_reg = g_holding_regs[HLD_TEMP_PID_MAX_RISE_OFFSET];
-    if (max_rise_reg == 0 || max_rise_reg > 1000) max_rise_reg = 100; // 默认10%/s
-    g_temp_pid.max_rise = (int32_t)max_rise_reg * 1024 / 10;
-    // 滤波系数
-    g_temp_pid.filter_coeff = (uint8_t)(g_holding_regs[HLD_TEMP_PID_FILTER_OFFSET] & 0xFF);
-    // ---------------- 加载功率PID参数 ----------------
-    kp_reg = g_holding_regs[HLD_POWER_PID_PROP_GAIN_OFFSET];
-    ki_reg = g_holding_regs[HLD_POWER_PID_INT_GAIN_OFFSET];
-    kd_reg = g_holding_regs[HLD_POWER_PID_DER_GAIN_OFFSET];
-    if (kp_reg == 0 || kp_reg > 10000) kp_reg = 100; // 默认1.0
-    if (ki_reg > 10000) ki_reg = 0;
-    if (kd_reg > 10000) kd_reg = 0;
-    g_power_pid.Kp = (int32_t)kp_reg * 1024 / 100; // 转为Q10
-    g_power_pid.Ki = (int32_t)ki_reg * 1024 / 100;
-    g_power_pid.Kd = (int32_t)kd_reg * 1024 / 100;
-    // 最大上升率（放大10倍存储，单位%/s，转为Q10）
-    max_rise_reg = g_holding_regs[HLD_POWER_PID_MAX_RISE_OFFSET];
-    if (max_rise_reg == 0 || max_rise_reg > 1000) max_rise_reg = 100; // 默认10%/s
-    g_power_pid.max_rise = (int32_t)max_rise_reg * 1024 / 10;
-    // 滤波系数
-    g_power_pid.filter_coeff = (uint8_t)(g_holding_regs[HLD_POWER_PID_FILTER_OFFSET] & 0xFF);
+    /*
+     * 级联控制单位约定：
+     * - 温度 PID：输入/目标为温度，输出为目标功率；
+     * - 功率 PID：输入/目标为真实功率，输出为 PWM 百分比。
+     */
+    PID_Load_One(&g_temp_pid,
+        HLD_TEMP_PID_PROP_GAIN_OFFSET,
+        HLD_TEMP_PID_INT_GAIN_OFFSET,
+        HLD_TEMP_PID_DER_GAIN_OFFSET,
+        HLD_TEMP_PID_MAX_RISE_OFFSET,
+        HLD_TEMP_PID_FILTER_OFFSET);
+    PID_Set_Output_Limits(&g_temp_pid, 0, Get_Power_Limit_Q10(), Get_Power_Limit_Q10());
+
+    PID_Load_One(&g_power_pid,
+        HLD_POWER_PID_PROP_GAIN_OFFSET,
+        HLD_POWER_PID_INT_GAIN_OFFSET,
+        HLD_POWER_PID_DER_GAIN_OFFSET,
+        HLD_POWER_PID_MAX_RISE_OFFSET,
+        HLD_POWER_PID_FILTER_OFFSET);
+    PID_Set_Output_Limits(&g_power_pid, 0, PID_PERCENT_MAX, PID_PERCENT_MAX);
 }
-/*============================================================================
- * 硬件初始化（PWM、内部ADC、外部串口ADC）
- *============================================================================*/
+
 void PID_Hardware_Init(void)
 {
-    // PWM输出引脚由 board.h 定义为 P2.0，用于 PID 调节功率。
+    /* PWM 输出引脚配置为推挽输出。 */
     P2M0 |= BIT(IO_PWM_OUT_PIN);
     P2M1 &= ~BIT(IO_PWM_OUT_PIN);
-    // PWMA_CH1 使用 500 计数周期，Set_PWM_Duty() 按 0~1000 直接写入 CCR1.
-    // 当前工程 board 配置为 11.0592MHz，PWM 频率 22.1184kHz，超出音频范围无啸叫
+
+    /* 初始化 PWMA1：ARR=500，CCR=duty/2，duty=1000 时对应 100.0%。 */
     PWMA_CR1 = 0x00;
     PWMA_CCER1 &= ~0x01;
     PWMA_PSCRH = 0x00;
     PWMA_PSCRL = 0x00;
     PWMA_ARRH = 0x01;
-    PWMA_ARRL = 0xF4; // 重载值500
+    PWMA_ARRL = 0xF4;
     PWMA_CCR1H = 0x00;
     PWMA_CCR1L = 0x00;
     g_pwm_duty = 0;
     PWMA_CCMR1 = 0x60;
     PWMA_CCER1 |= 0x01;
     PWMA_CR1 |= 0x01;
-    // 温度 T1~T4、外部模拟量 1/2 使用 adc_sensor 模块内部 ADC.
+
     adc_sensor_init();
-    // 直流电压、直流电流使用 uart_adc 模块经串口3/串口4接收.
     uart_adc_init();
 }
-/*============================================================================
- * PWM 占空比更新函数
- *============================================================================*/
-void Set_PWM_Duty(uint16_t duty) // duty: 0~1000 对应 0.0%~100.0%
+
+void Set_PWM_Duty(uint16_t duty)
 {
     uint16_t ccr_value;
-    if (duty > 1000)
-        duty = 1000;
+
+    /* duty 使用 0.1% 精度，超过 1000 直接限幅，保护硬件输出。 */
+    if (duty > 1000U) duty = 1000U;
     g_pwm_duty = duty;
-    // 写入 PWM 占空比寄存器 (CCR1)，重载值500，所以除以2
-    ccr_value = duty / 2;
+    ccr_value = duty / 2U;
     PWMA_CCR1H = (uint8_t)(ccr_value >> 8);
     PWMA_CCR1L = (uint8_t)(ccr_value & 0xFF);
 }
-static uint16_t Apply_Temperature_Calibration(uint16_t raw, int16_t zero)
-{
-    int32_t cal;
-    cal = (int32_t)raw - (int32_t)zero;
-    if (cal < 0) cal = 0;
-    if (cal > 65535) cal = 65535;
-    return (uint16_t)cal;
-}
-/*============================================================================
- * 校准换算：raw 已是采集侧物理量，不是 ADC 码值。
- * 温度: actual = raw - zero，不使用满量程。
- * 其他模拟量: actual = (raw - zero) * full / 5，不再放大100倍。
- * zero 按 int16_t 解释，full 为被测对象物理满量程。
- *============================================================================*/
-static uint16_t Apply_Analog_Calibration(uint16_t raw, int16_t zero, uint16_t full)
-{
-    int32_t cal;
-    if (full == 0) {
-        // 未标定时，直接返回原始值
-        return raw;
-    }
-    cal = ((int32_t)raw - (int32_t)zero) * (int32_t)full / (int32_t)ANALOG_INPUT_FULL_SCALE;
-    if (cal < 0) cal = 0;
-    if (cal > 65535) cal = 65535;
-    return (uint16_t)cal;
-}
-/*============================================================================
- * 输入寄存器刷新：将原始 ADC 值写入 g_input_regs，并应用校准公式
- * 30000~30009: 已校准值 (已换算，HMI直接显示)
- * 30020~30027: 原始采集值 (用于诊断/二次校准)
- *============================================================================*/
+
 void Modbus_Input_Reg_Update(void)
 {
     uint16_t temp1;
@@ -250,13 +414,14 @@ void Modbus_Input_Reg_Update(void)
     uint16_t temp3;
     uint16_t temp4;
 
-    // 读取原始 ADC 值 (内部ADC先采样，再读UART ADC)
+    /* 先刷新本地 ADC 温度，再读取 UART ADC 的电压、电流和外部模拟量。 */
     adc_sensor_read_all();
     temp1 = adc_sensor_get_temp1();
     temp2 = adc_sensor_get_temp2();
     temp3 = adc_sensor_get_temp3();
     temp4 = adc_sensor_get_temp4();
-    // 30020~30027: 原始采集值 (不做任何换算)
+
+    /* 30020~30027 保存未校准值，便于现场查看传感器和校准前状态。 */
     g_input_regs[RAW_IR_VOLT_OFFSET]  = uart_adc_get_voltage();
     g_input_regs[RAW_IR_CURR_OFFSET]  = uart_adc_get_current();
     g_input_regs[RAW_IR_TEMP1_OFFSET] = adc_sensor_get_temp1_raw();
@@ -264,11 +429,12 @@ void Modbus_Input_Reg_Update(void)
     g_input_regs[RAW_IR_TEMP3_OFFSET] = adc_sensor_get_temp3_raw();
     g_input_regs[RAW_IR_TEMP4_OFFSET] = adc_sensor_get_temp4_raw();
     g_input_regs[RAW_IR_EXT1_OFFSET]  = adc_sensor_get_ext1();
-    g_input_regs[RAW_IR_EXT2_OFFSET] = adc_sensor_get_ext2();
-    // 30000~30009: 已校准物理值，不放大100倍
-    g_input_regs[REG_DC_VOLT_OFFSET]  = Apply_Analog_Calibration(g_input_regs[RAW_IR_VOLT_OFFSET],
+    g_input_regs[RAW_IR_EXT2_OFFSET]  = adc_sensor_get_ext2();
+
+    /* 30001~30009 保存校准后的实际物理量。 */
+    g_input_regs[REG_DC_VOLT_OFFSET] = Apply_Analog_Calibration(g_input_regs[RAW_IR_VOLT_OFFSET],
         (int16_t)g_holding_regs[HLD_VOLT_ZERO_OFFSET], g_holding_regs[HLD_VOLT_FULL_OFFSET]);
-    g_input_regs[REG_DC_CURR_OFFSET]  = Apply_Analog_Calibration(g_input_regs[RAW_IR_CURR_OFFSET],
+    g_input_regs[REG_DC_CURR_OFFSET] = Apply_Analog_Calibration(g_input_regs[RAW_IR_CURR_OFFSET],
         (int16_t)g_holding_regs[HLD_CURR_ZERO_OFFSET], g_holding_regs[HLD_CURR_FULL_OFFSET]);
     g_input_regs[REG_TEMP_T1_OFFSET] = Apply_Temperature_Calibration(temp1,
         (int16_t)g_holding_regs[HLD_TEMP1_ZERO_OFFSET]);
@@ -282,44 +448,37 @@ void Modbus_Input_Reg_Update(void)
         (int16_t)g_holding_regs[HLD_EXT1_ZERO_OFFSET], g_holding_regs[HLD_EXT1_FULL_OFFSET]);
     g_input_regs[REG_EXT_ADC2_OFFSET] = Apply_Analog_Calibration(g_input_regs[RAW_IR_EXT2_OFFSET],
         (int16_t)g_holding_regs[HLD_EXT2_ZERO_OFFSET], g_holding_regs[HLD_EXT2_FULL_OFFSET]);
-    // REG_WORK_FREQ_OFFSET(0) 由 main.c 中 Freq_Measure_Update() 维护
-    // REG_REAL_POWER_OFFSET(3): 实时功率 P = U * I
-     g_holding_regs[HLD_CHARGE_SET_OFFSET] = 0;
-    {
-        uint32_t power = (uint32_t)g_input_regs[REG_DC_VOLT_OFFSET] * (uint32_t)g_input_regs[REG_DC_CURR_OFFSET];
-        if (power > 65535) power = 65535;
-        g_input_regs[REG_REAL_POWER_OFFSET] = (uint16_t)power;
-    }
+
+    /* 30003 由真实电压和真实电流直接相乘得到，不使用 40032/40034 做百分比换算。 */
+    g_input_regs[REG_REAL_POWER_OFFSET] = Real_Power_From_VI(
+        g_input_regs[REG_DC_VOLT_OFFSET],
+        g_input_regs[REG_DC_CURR_OFFSET]);
 }
-/*============================================================================
- * 数据获取函数（从 Modbus 缓存或硬件读取）
- *============================================================================*/
+
 int32_t Get_Temperature(void)
 {
-    // 从 30004 获取实际温度，转为Q10格式
-    return (int32_t)g_input_regs[REG_TEMP_T1_OFFSET] * 1024;
+    return (int32_t)g_input_regs[REG_TEMP_T1_OFFSET] * Q_SCALE;
 }
+
 int32_t Get_Power(void)
 {
-    // 从 30003 获取实际功率，转为Q10格式
-    return (int32_t)g_input_regs[REG_REAL_POWER_OFFSET] * 1024;
+    /* 功率 PID 反馈使用 30003 真实功率，不能再按 0~100% 处理。 */
+    return (int32_t)g_input_regs[REG_REAL_POWER_OFFSET] * Q_SCALE;
 }
-// 获取目标温度
+
 int32_t Get_Target_Temp(void)
 {
-    // 保持寄存器里的目标温度为实际值，转为Q10格式
-    return (int32_t)g_holding_regs[HLD_TARGET_TEMP_OFFSET] * 1024;
+    return (int32_t)g_holding_regs[HLD_TARGET_TEMP_OFFSET] * Q_SCALE;
 }
-// 获取功率设定值 (40011)
+
 int32_t Get_Power_Setpoint(void)
 {
-    // 保持寄存器里的功率设定值为实际值，转为Q10格式
-    return (int32_t)g_holding_regs[HLD_POWER_SETPOINT_OFFSET] * 1024;
+    uint16_t setpoint;
+    uint16_t limit;
+
+    /* 40011 是真实目标功率，最多受 40027 总功率限制约束。 */
+    setpoint = g_holding_regs[HLD_POWER_SETPOINT_OFFSET];
+    limit = Get_Power_Limit_Value();
+    if (setpoint > limit) setpoint = limit;
+    return (int32_t)setpoint * Q_SCALE;
 }
-
-
-
-
-
-
-

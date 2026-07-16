@@ -35,7 +35,7 @@
 #define REG_WORK_FREQ_OFFSET 0  // 30000 : 工作频率 (Hz，P3.4下降沿计数)
 #define REG_DC_VOLT_OFFSET 1    // 30001 : 直流电压 (已校准)
 #define REG_DC_CURR_OFFSET 2    // 30002 : 直流电流 (已校准)
-#define REG_REAL_POWER_OFFSET 3 // 30003 : 实时运行功率 (0~100%)
+#define REG_REAL_POWER_OFFSET 3 // 30003 : 实时运行功率，真实功率值 = 30001真实电压 * 30002真实电流
 #define REG_TEMP_T1_OFFSET 4    // 30004 : 温度采集T1 (已校准)
 #define REG_TEMP_T2_OFFSET 5    // 30005 : 温度采集T2 (已校准)
 #define REG_TEMP_T3_OFFSET 6    // 30006 : 温度采集T3 (已校准)
@@ -69,7 +69,7 @@
 #define HLD_CTRL_MODE_OFFSET 1   // 40001 : 控制方式选择 触屏=1, 远程和电位器=0
 #define HLD_TARGET_TEMP_OFFSET 2 // 40002 : 目标温度
 #define HLD_CHANGE_MODE_OFFSET 3 // 40003 : 控制模式。默认值是0，分段是1，温控是2.
-#define HLD_POWER_SETPOINT_OFFSET 11 // 40011 : 目标功率 (0~100%)
+#define HLD_POWER_SETPOINT_OFFSET 11 // 40011 : 目标功率，单位与30003一致，不是百分比
 
 /* --- 分区3：报警上下限 (偏移 21~28) --- */
 #define HLD_VOLT_LOW_OFFSET 21    // 40021 : 电压报警下限
@@ -78,7 +78,7 @@
 #define HLD_FREQ_HIGH_OFFSET 24   // 40024 : 频率报警上限
 #define HLD_TEMP_HIGH_OFFSET 25   // 40025 : 温度报警上限
 #define HLD_TEMP_LOW_OFFSET 26    // 40026 : 温度报警下限
-#define HLD_POWER_LIMIT_OFFSET 27 // 40027 : 总功率限制
+#define HLD_POWER_LIMIT_OFFSET 27 // 40027 : 总功率限制，单位与30003一致，0表示不限制
 #define HLD_CHARGE_SET_OFFSET 28  // 40028 : 充电设置
 
 /* --- 分区4：模拟量校准参数 (偏移 31~46) --- */
@@ -100,7 +100,7 @@
 #define HLD_EXT2_FULL_OFFSET 46  // 40046 : 外部0-5V采集2 - 满量程
 
 /* --- 分区5：工艺加热曲线参数 (偏移 50~99) --- */
-/* 5组工件，每组5段，每段2个寄存器: [功率(0~100), 时间(×10, 0.1s精度)] */
+/* 5组工件，每组5段，每段2个寄存器: [目标功率(真实功率), 时间(×10, 0.1s精度)] */
 #define WORK_GROUP_START(group) (50 + ((group) - 1) * 10)                         // group = 1~5
 #define WORK_POWER_OFFSET(group, seg) (WORK_GROUP_START(group) + ((seg) - 1) * 2) // seg = 1~5
 #define WORK_TIME_OFFSET(group, seg) (WORK_POWER_OFFSET(group, seg) + 1)
@@ -110,21 +110,21 @@
 
 /* ---- PID参数 (温度PID) 偏移 102~108 ---- */
 #define HLD_TEMP_PID_SAMPLE_TIME_OFFSET 102 // 采样时间
-#define HLD_TEMP_PID_MAX_RISE_OFFSET 103    // 最大上升率
+#define HLD_TEMP_PID_MAX_RISE_OFFSET 103    // 温控输出最大上升率，单位为目标功率/秒
 #define HLD_TEMP_PID_PROP_GAIN_OFFSET 104   // 比例增益
 #define HLD_TEMP_PID_INT_GAIN_OFFSET 105    // 积分增益
 #define HLD_TEMP_PID_DER_GAIN_OFFSET 106    // 微分增益
 #define HLD_TEMP_PID_FILTER_OFFSET 107      // 滤波
-#define HLD_TEMP_PID_ADJUST_OFFSET 108      // 调节量
+#define HLD_TEMP_PID_ADJUST_OFFSET 108      // 温控输出目标功率，单位与30003一致
 
 /* ---- PID参数 (功率PID) 偏移 110~116 ---- */
 #define HLD_POWER_PID_SAMPLE_TIME_OFFSET 110 // 采样时间
-#define HLD_POWER_PID_MAX_RISE_OFFSET 111    // 最大上升率
+#define HLD_POWER_PID_MAX_RISE_OFFSET 111    // 功控输出最大上升率，单位为PWM百分比/秒
 #define HLD_POWER_PID_PROP_GAIN_OFFSET 112   // 比例增益
 #define HLD_POWER_PID_INT_GAIN_OFFSET 113    // 积分增益
 #define HLD_POWER_PID_DER_GAIN_OFFSET 114    // 微分增益
 #define HLD_POWER_PID_FILTER_OFFSET 115      // 滤波
-#define HLD_POWER_PID_ADJUST_OFFSET 116      // 调节量
+#define HLD_POWER_PID_ADJUST_OFFSET 116      // 功控PWM调节量，0~1000对应0.0%~100.0%
 
 /*============================================================================
  * 辅助宏：将偏移转换为标准 Modbus PLC 地址 (用于调试或HMI侧核对)

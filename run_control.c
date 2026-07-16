@@ -2,38 +2,42 @@
 #include "pid_drive.h"
 #include "modbus_reg_config.h"
 
-// 按键直接启动标志（定义）：物理按键置位，无视 HLD_CTRL_MODE_OFFSET
-volatile uint8_t g_key_running = 0;
+/* 40003 控制模式：0=功率恒定，1=分段加热，2=温度闭环。 */
+#define MODE_POWER   0U
+#define MODE_SEGMENT 1U
+#define MODE_TEMP    2U
+#define CONTROL_DEFAULT_MS 100U
 
-// 远控启动标志（定义）：远控信号短按启动置位，长按/再次短按停止清零
+/* 按键和远程端子运行状态由其他扫描逻辑置位，控制循环统一汇总。 */
+volatile uint8_t g_key_running = 0;
 volatile uint8_t g_remote_running = 0;
 
-/*============================================================================
- * 控制启停辅助
- *============================================================================*/
-// 当前是否处于运行状态（任意启动源：触屏线圈/按键/远控）
+/* 分段加热运行状态：每段时间单位为 100ms，系统节拍为 5ms。 */
+static uint8_t  xdata g_segment_running = 0;
+static uint8_t  xdata g_segment_index = 0;
+static uint16_t xdata g_segment_elapsed_100ms = 0;
+static uint16_t xdata g_segment_last_tick_5ms = 0;
+
+static uint8_t  xdata g_control_prev_active = 0;
+static uint16_t xdata g_control_prev_mode = 0xFFFFU;
+static uint16_t xdata g_temp_elapsed_ms = 0;
+static uint16_t xdata g_power_elapsed_ms = 0;
+
 static uint8_t Control_Is_Active(void)
 {
+    /* 触屏启动、按键启动、远程端子启动三者任一有效即认为系统运行。 */
     return ((g_holding_regs[HLD_CTRL_MODE_OFFSET] == 1) && (g_coils[COIL_START_STOP_OFFSET] != 0))
         || (g_key_running != 0)
         || (g_remote_running != 0);
 }
 
-// 停止所有启动源
 static void Control_Stop_All(void)
 {
+    /* 内部停止统一清除所有启动源，避免某一路状态残留导致再次启动。 */
     g_coils[COIL_START_STOP_OFFSET] = 0;
     g_key_running = 0;
     g_remote_running = 0;
 }
-
-/*============================================================================
- * 分段加热状态
- *============================================================================*/
-static uint8_t  xdata g_segment_running = 0;
-static uint8_t  xdata g_segment_index = 0;
-static uint16_t xdata g_segment_elapsed_100ms = 0;
-static uint16_t xdata g_segment_last_tick_5ms = 0;
 
 static void Segment_Heat_Reset(void)
 {
@@ -43,44 +47,93 @@ static void Segment_Heat_Reset(void)
     g_segment_last_tick_5ms = g_system_tick_5ms;
 }
 
-/*============================================================================
- * 分段加热更新：根据当前工件编号和段索引返回目标功率(Q10格式)
- * 工件号 HLD_CUR_WORK_NO_OFFSET(1~5)，每工件5段，每段含[功率, 时间(×100ms)]
- * 所有段完成后自动停止加热
- *============================================================================*/
+static int32_t Clamp_Power_Target_Q10(int32_t target)
+{
+    int32_t limit;
+
+    /* 目标功率限幅：单位与 30003/40011 一致，内部乘 Q_SCALE。 */
+    limit = (int32_t)Get_Power_Limit_Value() * Q_SCALE;
+    if (target < 0) return 0;
+    if (target > limit) return limit;
+    return target;
+}
+
+static int32_t Clamp_Output_Percent_Q10(int32_t output)
+{
+    /* 功率 PID 的输出才是 PWM 百分比，固定限制在 0~100%。 */
+    if (output < 0) return 0;
+    if (output > PID_PERCENT_MAX) return PID_PERCENT_MAX;
+    return output;
+}
+
+static uint16_t Accumulate_Elapsed(uint16_t current, uint16_t add, uint16_t cap)
+{
+    uint32_t sum;
+
+    /* 累计采样时间时不超过采样周期，避免长时间阻塞后一次性超大 dt。 */
+    sum = (uint32_t)current + (uint32_t)add;
+    if (sum > (uint32_t)cap) return cap;
+    return (uint16_t)sum;
+}
+
+static void Reset_Unused_Pids(uint16_t mode)
+{
+    /* 非当前模式的 PID/分段状态要复位，切回时从干净状态开始。 */
+    if (mode != MODE_TEMP) {
+        PID_Reset(&g_temp_pid);
+        g_temp_elapsed_ms = PID_Get_Temp_Sample_Time();
+    }
+    if (mode != MODE_SEGMENT) {
+        Segment_Heat_Reset();
+    }
+}
+
+static void Reset_Control_State(uint16_t mode)
+{
+    PID_Reset(&g_temp_pid);
+    PID_Reset(&g_power_pid);
+    Segment_Heat_Reset();
+    g_temp_elapsed_ms = PID_Get_Temp_Sample_Time();
+    g_power_elapsed_ms = PID_Get_Power_Sample_Time();
+    g_control_prev_mode = mode;
+}
+
 static int32_t Segment_Heat_Update(void)
 {
-    uint8_t  work_no = (uint8_t)g_holding_regs[HLD_CUR_WORK_NO_OFFSET];
-    uint16_t now_tick = g_system_tick_5ms;
-    uint16_t diff_tick = now_tick - g_segment_last_tick_5ms;
+    uint8_t work_no;
+    uint16_t now_tick;
+    uint16_t diff_tick;
     uint16_t power;
     uint16_t time_100ms;
 
-    if (work_no == 0 || work_no > 5)
-    {
+    /* 分段模式读取当前工件号，每个工件最多 5 段。 */
+    work_no = (uint8_t)g_holding_regs[HLD_CUR_WORK_NO_OFFSET];
+    now_tick = g_system_tick_5ms;
+    diff_tick = now_tick - g_segment_last_tick_5ms;
+
+    if (work_no == 0 || work_no > 5U) {
         Segment_Heat_Reset();
         return 0;
     }
-    if (g_segment_running == 0)
-    {
+
+    if (g_segment_running == 0) {
         g_segment_running = 1;
         g_segment_index = 1;
         g_segment_elapsed_100ms = 0;
         g_segment_last_tick_5ms = now_tick;
     }
-    // 累计100ms为单位的时间（20 × 5ms = 100ms）
-    while (diff_tick >= 20)
-    {
+
+    /* 20 个 5ms tick = 100ms，和工艺时间寄存器单位一致。 */
+    while (diff_tick >= 20U) {
         g_segment_elapsed_100ms++;
-        g_segment_last_tick_5ms += 20;
-        diff_tick -= 20;
+        g_segment_last_tick_5ms += 20U;
+        diff_tick -= 20U;
     }
-    // 推进到当前应执行的段
-    while (g_segment_index <= 5)
-    {
+
+    /* 时间为 0 的段直接跳过；所有段结束后停止运行。 */
+    while (g_segment_index <= 5U) {
         time_100ms = g_holding_regs[WORK_TIME_OFFSET(work_no, g_segment_index)];
-        if (time_100ms == 0 || g_segment_elapsed_100ms >= time_100ms)
-        {
+        if (time_100ms == 0 || g_segment_elapsed_100ms >= time_100ms) {
             g_segment_index++;
             g_segment_elapsed_100ms = 0;
             g_segment_last_tick_5ms = now_tick;
@@ -88,27 +141,23 @@ static int32_t Segment_Heat_Update(void)
         }
         break;
     }
-    if (g_segment_index > 5)
-    {
-        // 所有段执行完毕，停止加热
+
+    if (g_segment_index > 5U) {
         Control_Stop_All();
         Segment_Heat_Reset();
         return 0;
     }
+
+    /* 段功率是目标真实功率，不是 PWM 百分比。 */
     power = g_holding_regs[WORK_POWER_OFFSET(work_no, g_segment_index)];
-    if (power > 100)
-        power = 100;
-    // 返回功率Q10格式
-    return ((int32_t)power) * 1024L;
+    return Clamp_Power_Target_Q10((int32_t)power * Q_SCALE);
 }
 
-/*============================================================================
- * 控制逻辑主循环
- *============================================================================*/
-void Run_Control_Loop(void)
+void Run_Control_Loop(uint16_t elapsed_ms)
 {
-    uint16_t dt = 100; // 默认100ms周期
     uint16_t mode;
+    uint16_t temp_sample_ms;
+    uint16_t power_sample_ms;
     int32_t current_temp;
     int32_t current_power;
     int32_t final_power_target;
@@ -116,115 +165,125 @@ void Run_Control_Loop(void)
     uint16_t duty;
     uint8_t control_active;
 
-    // 控制启动条件（任意启动源）：
-    //   触屏模式(HLD_CTRL_MODE_OFFSET=1)由启动线圈COIL_START_STOP_OFFSET控制
-    //   按键(g_key_running)/远控(g_remote_running)无视HLD_CTRL_MODE_OFFSET，直接按HLD_CHANGE_MODE_OFFSET控制
+    if (elapsed_ms == 0) elapsed_ms = CONTROL_DEFAULT_MS;
+
+    /* 未运行时强制关闭 PWM，并清空 PID 和显示调节量。 */
     control_active = Control_Is_Active();
-    if (!control_active)
-    {
+    if (!control_active) {
         Set_PWM_Duty(0);
         PID_Reset(&g_temp_pid);
         PID_Reset(&g_power_pid);
         Segment_Heat_Reset();
+        g_temp_elapsed_ms = 0;
+        g_power_elapsed_ms = 0;
+        g_control_prev_active = 0;
+        g_holding_regs[HLD_TEMP_PID_ADJUST_OFFSET] = 0;
+        g_holding_regs[HLD_POWER_PID_ADJUST_OFFSET] = 0;
         return;
     }
 
-    // 加载最新PID参数
+    /* 允许 HMI 在线修改 PID 参数，每次控制循环重新装载并限幅。 */
     PID_LoadParams();
 
-    // 读取当前测量值
+    mode = g_holding_regs[HLD_CHANGE_MODE_OFFSET];
+    if (mode > MODE_TEMP) mode = MODE_POWER;
+
+    if (!g_control_prev_active || mode != g_control_prev_mode) {
+        Reset_Control_State(mode);
+    }
+    g_control_prev_active = 1;
+    g_control_prev_mode = mode;
+
+    temp_sample_ms = PID_Get_Temp_Sample_Time();
+    power_sample_ms = PID_Get_Power_Sample_Time();
+    g_temp_elapsed_ms = Accumulate_Elapsed(g_temp_elapsed_ms, elapsed_ms, temp_sample_ms);
+    g_power_elapsed_ms = Accumulate_Elapsed(g_power_elapsed_ms, elapsed_ms, power_sample_ms);
+
+    Reset_Unused_Pids(mode);
+
+    /* 测量值已经在 Modbus_Input_Reg_Update 中完成校准和物理量换算。 */
     current_temp = Get_Temperature();
     current_power = Get_Power();
 
-    mode = g_holding_regs[HLD_CHANGE_MODE_OFFSET];
-
-    switch (mode)
-    {
-        case 1: // 分段加热
-            final_power_target = Segment_Heat_Update();
-            break;
-        case 2: // 温度加热（恒温控制）：温度PID输出作为目标功率
-            g_temp_pid.setpoint = Get_Target_Temp();
-            final_power_target = PID_Calc(&g_temp_pid, current_temp, dt);
-            if (final_power_target < 0)
-                final_power_target = 0;
-            if (final_power_target > (int32_t)100 * Q_SCALE)
-                final_power_target = 100 * Q_SCALE;
-            break;
-        default: // 0 = 默认，按目标功率PID控制
-            final_power_target = Get_Power_Setpoint();
-            break;
+    /*
+     * 三种模式最终都产生一个“目标功率”：
+     * - 功率模式：40011；
+     * - 分段模式：当前段功率；
+     * - 温控模式：温度 PID 输出。
+     */
+    if (mode == MODE_SEGMENT) {
+        final_power_target = Segment_Heat_Update();
+    } else if (mode == MODE_TEMP) {
+        g_temp_pid.setpoint = Get_Target_Temp();
+        if (g_temp_elapsed_ms >= temp_sample_ms) {
+            final_power_target = PID_Calc(&g_temp_pid, current_temp, g_temp_elapsed_ms);
+            g_temp_elapsed_ms = 0;
+        } else {
+            final_power_target = g_temp_pid.prev_output;
+        }
+        final_power_target = Clamp_Power_Target_Q10(final_power_target);
+    } else {
+        final_power_target = Get_Power_Setpoint();
     }
 
-    // 功率PID（内环）
-    g_power_pid.setpoint = final_power_target;
-    pwm_output = PID_Calc(&g_power_pid, current_power, dt);
-    if (pwm_output < 0)
-        pwm_output = 0;
-    if (pwm_output > (int32_t)100 * Q_SCALE)
-        pwm_output = 100 * Q_SCALE;
+    /* 功率 PID 根据真实功率误差调节 PWM 百分比。 */
+    g_power_pid.setpoint = Clamp_Power_Target_Q10(final_power_target);
+    if (g_power_elapsed_ms >= power_sample_ms) {
+        pwm_output = PID_Calc(&g_power_pid, current_power, g_power_elapsed_ms);
+        g_power_elapsed_ms = 0;
+    } else {
+        pwm_output = g_power_pid.prev_output;
+    }
+    pwm_output = Clamp_Output_Percent_Q10(pwm_output);
 
-    // Q10格式转0~1000占空比
-    duty = (uint16_t)(pwm_output * 10 / Q_SCALE);
+    /* pwm_output 为 0~100%，Set_PWM_Duty 使用 0~1000 的 0.1% 精度。 */
+    duty = (uint16_t)(pwm_output * 10L / Q_SCALE);
     Set_PWM_Duty(duty);
 
-    // 写入调节量到保持寄存器（只读，用于HMI显示，放大10倍）
-    g_holding_regs[HLD_TEMP_PID_ADJUST_OFFSET] = (uint16_t)(((uint32_t)final_power_target * 10UL) / 1024UL);
-    g_holding_regs[HLD_POWER_PID_ADJUST_OFFSET] = (uint16_t)(((uint32_t)pwm_output * 10UL) / 1024UL);
+    /* 40108 显示温控外环输出目标功率；40116 显示功控内环 PWM 输出。 */
+    if (mode == MODE_TEMP) {
+        g_holding_regs[HLD_TEMP_PID_ADJUST_OFFSET] =
+            (uint16_t)((uint32_t)final_power_target / (uint32_t)Q_SCALE);
+    } else {
+        g_holding_regs[HLD_TEMP_PID_ADJUST_OFFSET] = 0;
+    }
+    g_holding_regs[HLD_POWER_PID_ADJUST_OFFSET] =
+        (uint16_t)(((uint32_t)pwm_output * 10UL) / (uint32_t)Q_SCALE);
 }
 
-/*============================================================================
- * 远控信号扫描（P5.2，低电平有效）
- * 50ms防抖；短按(<2s)翻转运行状态，长按(>=2s)松开后停止
- * 停止状态按下立即启动，松开时再判断长按/短按
- *============================================================================*/
-#define REMOTE_DEBOUNCE_TICKS   10    // 50ms = 10 × 5ms
-#define REMOTE_LONG_PRESS_TICKS 400   // 2s  = 400 × 5ms
+#define REMOTE_DEBOUNCE_TICKS   10U
+#define REMOTE_LONG_PRESS_TICKS 400U
 
-static uint8_t  xdata g_remote_state = 0;        // 防抖后电平：0=释放, 1=按下
+static uint8_t  xdata g_remote_state = 0;
 static uint16_t xdata g_remote_last_tick = 0;
 static uint16_t xdata g_remote_press_tick = 0;
-static uint8_t  xdata g_remote_was_running = 0;  // 按下前的运行状态
+static uint8_t  xdata g_remote_was_running = 0;
 
 void Remote_Control_Scan(void)
 {
     uint16_t now;
-    uint8_t  pressed;
+    uint8_t pressed;
 
+    /* 远程输入低电平有效，带 50ms 去抖和 2s 长按停止。 */
     now = g_system_tick_5ms;
-    if ((uint16_t)(now - g_remote_last_tick) < REMOTE_DEBOUNCE_TICKS)
+    if ((uint16_t)(now - g_remote_last_tick) < REMOTE_DEBOUNCE_TICKS) {
         return;
+    }
     g_remote_last_tick = now;
 
-    /* 远控信号低电平有效：REMOTE_READ()==0 表示按下 */
     pressed = REMOTE_READ() ? 0 : 1;
-
-    if (pressed == g_remote_state)
-        return;
+    if (pressed == g_remote_state) return;
 
     g_remote_state = pressed;
-    if (pressed)
-    {
-        /* 按下：记录按下前运行状态；停止状态则立即启动 */
+    if (pressed) {
         g_remote_was_running = Control_Is_Active();
         g_remote_press_tick = now;
-        if (!g_remote_was_running)
-            g_remote_running = 1;
-    }
-    else
-    {
-        /* 松开：判断长按/短按 */
-        if ((uint16_t)(now - g_remote_press_tick) >= REMOTE_LONG_PRESS_TICKS)
-        {
-            /* 长按：立即停止 */
+        if (!g_remote_was_running) g_remote_running = 1;
+    } else {
+        if ((uint16_t)(now - g_remote_press_tick) >= REMOTE_LONG_PRESS_TICKS) {
             Control_Stop_All();
-        }
-        else
-        {
-            /* 短按：相对按下前状态翻转 */
-            if (g_remote_was_running)
-                Control_Stop_All();   /* 按下前在运行 -> 停止 */
-            /* 按下前已停止，按下时已启动 -> 保持运行 */
+        } else {
+            if (g_remote_was_running) Control_Stop_All();
         }
     }
 }
