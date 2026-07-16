@@ -7,7 +7,11 @@
 #define ADC_FLAG   0x20
 #define ADC_FILTER_COUNT 8
 #define ADC_RESOLUTION 4096
-#define VCC_MV 3300
+#define ADC_CONVERT_TIMEOUT 10000U
+#define EXT_INPUT_FULL_SCALE 5
+#define ADC_RESULT_RIGHT_ALIGN 0x20
+#define ADC_REF_MV 5000
+#define NTC_SUPPLY_MV 5000
 #define NTC_R0 10000
 #define NTC_B 3950
 #define NTC_T0_K 29815
@@ -76,14 +80,13 @@ static uint16_t ntc_adc_to_temp(uint16_t adc)
     if (adc >= ADC_RESOLUTION) adc = ADC_RESOLUTION - 1;
     if (adc == 0) return 0;
 
-    /* 开路检测：ADC接近满量程说明NTC未接（引脚被上拉到VCC） */
-    if (adc > 4000) return 0;
+    /* Board assumption: ADC reference and NTC divider pull-up are +5V. */
+    vadc = (uint32_t)adc * ADC_REF_MV / ADC_RESOLUTION;
 
-    vadc = (uint32_t)adc * VCC_MV / ADC_RESOLUTION;
+    if (vadc >= NTC_SUPPLY_MV || vadc == 0) return 0;
 
-    if (vadc >= VCC_MV || vadc == 0) return 0;
-
-    v_diff = VCC_MV - vadc;
+    v_diff = NTC_SUPPLY_MV - vadc;
+    if (v_diff == 0) return 0;
     r_ntc = (uint32_t)PULL_UP_RES * vadc / v_diff;
 
     if (r_ntc >= NTC_R0) {
@@ -104,9 +107,15 @@ static uint16_t ntc_adc_to_temp(uint16_t adc)
     t_c = (int32_t)t_k - 27315;
 
     if (t_c < 0) t_c = 0;
-    if (t_c > 20000) t_c = 20000;
+    if (t_c > 12500) t_c = 12500;
 
     return (uint16_t)(t_c / 100);  /* 转为整度数 */
+}
+
+static uint16_t ext_adc_to_voltage(uint16_t adc)
+{
+    if (adc >= ADC_RESOLUTION) adc = ADC_RESOLUTION - 1;
+    return (uint16_t)((uint32_t)adc * EXT_INPUT_FULL_SCALE / (ADC_RESOLUTION - 1));
 }
 
 static void delay_adc(void)
@@ -118,30 +127,34 @@ static void delay_adc(void)
 void adc_sensor_init(void)
 {
     ADC_CONTR = 0x80;
-    ADCCFG = 0x20 | 0x0F;
+    ADCCFG = ADC_RESULT_RIGHT_ALIGN | 0x0F;
     delay_adc();
 }
 
 uint16_t adc_sensor_read_channel(unsigned char channel)
 {
     uint16_t result;
-    unsigned char i;
+    uint16_t i;
 
     ADC_CONTR = ADC_POWER | (channel & 0x0F);
     delay_adc();
 
+    ADC_CONTR &= ~ADC_FLAG;
     ADC_CONTR |= ADC_START;
 
-    for (i = 0; i < 255; i++) {
+    for (i = 0; i < ADC_CONVERT_TIMEOUT; i++) {
         if (ADC_CONTR & ADC_FLAG) {
             break;
         }
     }
 
+    if ((ADC_CONTR & ADC_FLAG) == 0) {
+        return 0;
+    }
+
     ADC_CONTR &= ~ADC_FLAG;
 
-    result = ADC_RES;
-    result = (result << 4) | (ADC_RESL & 0x0F);
+    result = (((uint16_t)ADC_RES << 8) | ADC_RESL) & (ADC_RESOLUTION - 1);
 
     return result;
 }
@@ -182,5 +195,9 @@ uint16_t adc_sensor_get_temp1(void) { return ntc_adc_to_temp(g_adc_temp1); }
 uint16_t adc_sensor_get_temp2(void) { return ntc_adc_to_temp(g_adc_temp2); }
 uint16_t adc_sensor_get_temp3(void) { return ntc_adc_to_temp(g_adc_temp3); }
 uint16_t adc_sensor_get_temp4(void) { return ntc_adc_to_temp(g_adc_temp4); }
-uint16_t adc_sensor_get_ext1(void) { return g_adc_ext1; }
-uint16_t adc_sensor_get_ext2(void) { return g_adc_ext2; }
+uint16_t adc_sensor_get_temp1_raw(void) { return g_adc_temp1; }
+uint16_t adc_sensor_get_temp2_raw(void) { return g_adc_temp2; }
+uint16_t adc_sensor_get_temp3_raw(void) { return g_adc_temp3; }
+uint16_t adc_sensor_get_temp4_raw(void) { return g_adc_temp4; }
+uint16_t adc_sensor_get_ext1(void) { return ext_adc_to_voltage(g_adc_ext1); }
+uint16_t adc_sensor_get_ext2(void) { return ext_adc_to_voltage(g_adc_ext2); }

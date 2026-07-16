@@ -23,6 +23,37 @@ static unsigned short hex_to_dec(unsigned char byte)
     return ((byte >> 4) * 10) + (byte & 0x0F);
 }
 
+static unsigned short parse_input_register_address(unsigned char high, unsigned char low)
+{
+    unsigned short standard;
+    unsigned short bcd;
+
+    standard = ((unsigned short)high << 8) | low;
+    bcd = hex_to_dec(high) * 100 + hex_to_dec(low);
+
+    if (standard < INPUT_REG_COUNT) {
+        return standard;
+    }
+
+    return bcd;
+}
+
+static unsigned short parse_input_register_count(unsigned char high, unsigned char low, unsigned short start_address)
+{
+    unsigned short standard;
+    unsigned short bcd;
+
+    standard = ((unsigned short)high << 8) | low;
+    bcd = hex_to_dec(high) * 100 + hex_to_dec(low);
+
+    if (standard >= 1 && standard <= 0x007D && start_address < INPUT_REG_COUNT &&
+        standard <= (INPUT_REG_COUNT - start_address)) {
+        return standard;
+    }
+
+    return bcd;
+}
+
 unsigned char dev_address = 1;   			    								//设备地址,下载之前修改
 unsigned char dev_broadcast_address = 0;  								//设备广播地址
 
@@ -185,7 +216,6 @@ int function_READ_COILS_1(unsigned char *buf,int len) 				//读线圈，功能�
 	unsigned char var2 = 0;
 	unsigned char i ;
 	
-	//输入的起始地址和输出的数量（屏幕发送BCD格式，需转换为十进制）
 	start_address  = hex_to_dec(buf[2]) * 100;
 	start_address += hex_to_dec(buf[3]);
 	count  = hex_to_dec(buf[4]) * 100;
@@ -418,11 +448,8 @@ int function_READ_INPUT_REGISTERS_4(unsigned char *buf,int len)				//读输入�
 	int send_total_count = 0;
 	unsigned short sendValue = 0;
 	
-	//输入的起始地址和输出的数量（屏幕发送BCD格式，需转换为十进制）
-	start_address  = hex_to_dec(buf[2]) * 100;
-	start_address += hex_to_dec(buf[3]);
-	count  = hex_to_dec(buf[4]) * 100;
-	count += hex_to_dec(buf[5]);
+	start_address = parse_input_register_address(buf[2], buf[3]);
+	count = parse_input_register_count(buf[4], buf[5], start_address);
 	
 	//数量是否有效，如果无效 则发送异常码 3
 	if (count < 1 || count > 0x07D) 

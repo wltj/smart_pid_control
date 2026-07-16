@@ -57,22 +57,22 @@ DI_COUNT = 16
 # 输入寄存器 (IR) 偏移 0~27
 INPUT_REGS = {
     '工作频率':      {'offset': 0,  'addr': 30000, 'unit': 'Hz'},
-    '直流电压':      {'offset': 1,  'addr': 30001, 'unit': 'V×100'},
-    '直流电流':      {'offset': 2,  'addr': 30002, 'unit': 'A×100'},
+    '直流电压':      {'offset': 1,  'addr': 30001, 'unit': 'V'},
+    '直流电流':      {'offset': 2,  'addr': 30002, 'unit': 'A'},
     '实时功率':      {'offset': 3,  'addr': 30003, 'unit': '%'},
-    '温度T1':        {'offset': 4,  'addr': 30004, 'unit': '℃×100'},
-    '温度T2':        {'offset': 5,  'addr': 30005, 'unit': '℃×100'},
-    '温度T3':        {'offset': 6,  'addr': 30006, 'unit': '℃×100'},
-    '温度T4':        {'offset': 7,  'addr': 30007, 'unit': '℃×100'},
-    '外部ADC1':      {'offset': 8,  'addr': 30008, 'unit': 'V×100'},
-    '外部ADC2':      {'offset': 9,  'addr': 30009, 'unit': 'V×100'},
+    '温度T1':        {'offset': 4,  'addr': 30004, 'unit': '℃'},
+    '温度T2':        {'offset': 5,  'addr': 30005, 'unit': '℃'},
+    '温度T3':        {'offset': 6,  'addr': 30006, 'unit': '℃'},
+    '温度T4':        {'offset': 7,  'addr': 30007, 'unit': '℃'},
+    '外部ADC1':      {'offset': 8,  'addr': 30008, 'unit': '实际值'},
+    '外部ADC2':      {'offset': 9,  'addr': 30009, 'unit': '实际值'},
     # 原始采集值（偏移20~27）
     '原始电压':      {'offset': 20, 'addr': 30020, 'unit': 'raw'},
     '原始电流':      {'offset': 21, 'addr': 30021, 'unit': 'raw'},
-    '原始T1':        {'offset': 22, 'addr': 30022, 'unit': 'raw'},
-    '原始T2':        {'offset': 23, 'addr': 30023, 'unit': 'raw'},
-    '原始T3':        {'offset': 24, 'addr': 30024, 'unit': 'raw'},
-    '原始T4':        {'offset': 25, 'addr': 30025, 'unit': 'raw'},
+    '原始T1':        {'offset': 22, 'addr': 30022, 'unit': 'adc'},
+    '原始T2':        {'offset': 23, 'addr': 30023, 'unit': 'adc'},
+    '原始T3':        {'offset': 24, 'addr': 30024, 'unit': 'adc'},
+    '原始T4':        {'offset': 25, 'addr': 30025, 'unit': 'adc'},
     '原始EXT1':      {'offset': 26, 'addr': 30026, 'unit': 'raw'},
     '原始EXT2':      {'offset': 27, 'addr': 30027, 'unit': 'raw'},
 }
@@ -83,15 +83,15 @@ HR_COUNT = 117
 HOLDING_REGS = {
     '参数魔术字':     {'offset': 0,   'addr': 40000, 'desc': '固定0xA55A'},
     '控制方式':       {'offset': 1,   'addr': 40001, 'desc': '1=触屏,0=远程'},
-    '目标温度':       {'offset': 2,   'addr': 40002, 'unit': '℃×100'},
+    '目标温度':       {'offset': 2,   'addr': 40002, 'unit': '℃'},
     '控制模式':       {'offset': 3,   'addr': 40003, 'desc': '0=功率,1=分段,2=温控'},
     '目标功率':       {'offset': 11,  'addr': 40011, 'unit': '%'},
-    '电压下限':       {'offset': 21,  'addr': 40021, 'unit': 'V×100'},
-    '电压上限':       {'offset': 22,  'addr': 40022, 'unit': 'V×100'},
+    '电压下限':       {'offset': 21,  'addr': 40021, 'unit': 'V'},
+    '电压上限':       {'offset': 22,  'addr': 40022, 'unit': 'V'},
     '频率下限':       {'offset': 23,  'addr': 40023, 'unit': 'Hz'},
     '频率上限':       {'offset': 24,  'addr': 40024, 'unit': 'Hz'},
-    '温度上限':       {'offset': 25,  'addr': 40025, 'unit': '℃×100'},
-    '温度下限':       {'offset': 26,  'addr': 40026, 'unit': '℃×100'},
+    '温度上限':       {'offset': 25,  'addr': 40025, 'unit': '℃'},
+    '温度下限':       {'offset': 26,  'addr': 40026, 'unit': '℃'},
     '功率限制':       {'offset': 27,  'addr': 40027, 'unit': '%'},
     '充电设置':       {'offset': 28,  'addr': 40028, 'unit': 'mV'},
     # 校准参数
@@ -129,6 +129,25 @@ HOLDING_REGS = {
     '功控滤波系数':   {'offset': 115, 'addr': 40115},
     '功控调节量':     {'offset': 116, 'addr': 40116, 'unit': '%'},
 }
+
+SIGNED_HOLDING_OFFSETS = {31, 33, 35, 37, 39, 41, 43, 45}
+
+def decode_holding_value(offset, value):
+    value &= 0xFFFF
+    if offset in SIGNED_HOLDING_OFFSETS and value >= 0x8000:
+        return value - 0x10000
+    return value
+
+def encode_holding_value(offset, value):
+    if offset in SIGNED_HOLDING_OFFSETS:
+        return value & 0xFFFF
+    return value
+
+def holding_value_range(offset):
+    if offset in SIGNED_HOLDING_OFFSETS:
+        return -32768, 32767
+    return 0, 65535
+
 # 工艺曲线参数（5组，每组5段，每段2个寄存器：功率、时间）
 WORK_GROUPS = {}
 for g in range(1, 6):
@@ -318,10 +337,17 @@ class ModbusRtuClient(QObject):
         bits = self.read_discrete_inputs(0, DI_COUNT)
         if bits is not None:
             data['discrete'] = bits
-        # 输入寄存器
+        # 输入寄存器。固件兼容屏幕的 BCD 地址解析，标准请求 count=32 会被解析成 20。
         regs = self.read_input_registers(0, IR_COUNT)
         if regs is not None:
-            data['input_regs'] = regs
+            input_regs = [0] * IR_COUNT
+            for i, val in enumerate(regs[:IR_COUNT]):
+                input_regs[i] = val
+            raw_regs = self.read_input_registers(32, 8)
+            if raw_regs is not None:
+                for i, val in enumerate(raw_regs[:8]):
+                    input_regs[20 + i] = val
+            data['input_regs'] = input_regs
         # 保持寄存器 —— 按计划分批，并组装为完整 HR_COUNT 长度列表
         holding = [0] * HR_COUNT
         for start, count in self.holding_plan:
@@ -442,8 +468,8 @@ class MainWindow(QMainWindow):
         # 第一行：频率、电压、电流、功率
         row1 = QHBoxLayout()
         self.lbl_freq = self._create_labeled_value("工作频率", "0", "Hz", "30000")
-        self.lbl_volt = self._create_labeled_value("直流电压", "0", "V×100", "30001")
-        self.lbl_curr = self._create_labeled_value("直流电流", "0", "A×100", "30002")
+        self.lbl_volt = self._create_labeled_value("直流电压", "0", "V", "30001")
+        self.lbl_curr = self._create_labeled_value("直流电流", "0", "A", "30002")
         self.lbl_power = self._create_labeled_value("实时功率", "0", "%", "30003")
         for lbl in [self.lbl_freq, self.lbl_volt, self.lbl_curr, self.lbl_power]:
             row1.addWidget(lbl)
@@ -451,18 +477,18 @@ class MainWindow(QMainWindow):
 
         # 第二行：温度 T1~T4
         row2 = QHBoxLayout()
-        self.lbl_t1 = self._create_labeled_value("温度T1", "0", "℃×100", "30004")
-        self.lbl_t2 = self._create_labeled_value("温度T2", "0", "℃×100", "30005")
-        self.lbl_t3 = self._create_labeled_value("温度T3", "0", "℃×100", "30006")
-        self.lbl_t4 = self._create_labeled_value("温度T4", "0", "℃×100", "30007")
+        self.lbl_t1 = self._create_labeled_value("温度T1", "0", "℃", "30004")
+        self.lbl_t2 = self._create_labeled_value("温度T2", "0", "℃", "30005")
+        self.lbl_t3 = self._create_labeled_value("温度T3", "0", "℃", "30006")
+        self.lbl_t4 = self._create_labeled_value("温度T4", "0", "℃", "30007")
         for lbl in [self.lbl_t1, self.lbl_t2, self.lbl_t3, self.lbl_t4]:
             row2.addWidget(lbl)
         grid.addLayout(row2)
 
         # 第三行：外部ADC1/2，以及工作状态、故障总览
         row3 = QHBoxLayout()
-        self.lbl_ext1 = self._create_labeled_value("外部ADC1", "0", "V×100", "30008")
-        self.lbl_ext2 = self._create_labeled_value("外部ADC2", "0", "V×100", "30009")
+        self.lbl_ext1 = self._create_labeled_value("外部ADC1", "0", "实际值", "30008")
+        self.lbl_ext2 = self._create_labeled_value("外部ADC2", "0", "实际值", "30009")
         self.lbl_run_state = self._create_labeled_value("工作状态", "待机", "", "10000")
         self.lbl_fault_sum = self._create_labeled_value("总故障", "无", "", "10001-10006")
         for lbl in [self.lbl_ext1, self.lbl_ext2, self.lbl_run_state, self.lbl_fault_sum]:
@@ -600,9 +626,10 @@ class MainWindow(QMainWindow):
             return
         # 弹出输入框
         current_val = int(self.table_hr.item(row, 2).text())
-        new_val, ok = QInputDialog.getInt(self, "修改寄存器", f"输入新值 (地址 {offset:04X}):", current_val, 0, 65535)
+        min_val, max_val = holding_value_range(offset)
+        new_val, ok = QInputDialog.getInt(self, "修改寄存器", f"输入新值 (地址 {offset:04X}):", current_val, min_val, max_val)
         if ok:
-            if self.client.write_holding_register(offset, new_val):
+            if self.client.write_holding_register(offset, encode_holding_value(offset, new_val)):
                 self.table_hr.item(row, 2).setText(str(new_val))
 
     def create_work_tab(self):
@@ -902,7 +929,7 @@ class MainWindow(QMainWindow):
             hr = data['holding_regs']
             for off, (row, col) in self.hr_cells.items():
                 val = hr[off] if off < len(hr) else 0
-                self.table_hr.item(row, col).setText(str(val))
+                self.table_hr.item(row, col).setText(str(decode_holding_value(off, val)))
             # 工艺曲线
             for off, (row, col) in self.work_cells.items():
                 val = hr[off] if off < len(hr) else 0

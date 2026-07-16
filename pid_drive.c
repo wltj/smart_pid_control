@@ -23,6 +23,7 @@
 // 定点数缩放因子 Q_SCALE 已在 pid_drive.h 中定义
 #define Q_MUL(a,b) (((int32_t)(a) * (int32_t)(b)) / Q_SCALE)
 #define Q_DIV(a,b) (((int32_t)(a) * Q_SCALE) / (b))
+#define ANALOG_INPUT_FULL_SCALE 5U
 /*============================================================================
  * 全局变量定义
  *============================================================================*/
@@ -211,24 +212,28 @@ void Set_PWM_Duty(uint16_t duty) // duty: 0~1000 对应 0.0%~100.0%
     PWMA_CCR1H = (uint8_t)(ccr_value >> 8);
     PWMA_CCR1L = (uint8_t)(ccr_value & 0xFF);
 }
+static uint16_t Apply_Temperature_Calibration(uint16_t raw, int16_t zero)
+{
+    int32_t cal;
+    cal = (int32_t)raw - (int32_t)zero;
+    if (cal < 0) cal = 0;
+    if (cal > 65535) cal = 65535;
+    return (uint16_t)cal;
+}
 /*============================================================================
- * 校准换算：将原始 ADC 采集值按"校零"和"满量程"参数换算为实际值
- * 公式: actual = (raw - zero) * 1000 / full
- *       zero = HLD_XXX_ZERO (校零寄存器原始值)
- *       full = HLD_XXX_FULL  (满量程寄存器原始值)
- * 输入: raw   - 原始采集值 (uint16)
- *       zero  - 校零值 (HOLDING_REG[HLD_XXX_ZERO_OFFSET])
- *       full  - 满量程值 (HOLDING_REG[HLD_XXX_FULL_OFFSET])
- * 返回: 换算后实际值 (放大100倍，HMI再除以100显示)
+ * 校准换算：raw 已是采集侧物理量，不是 ADC 码值。
+ * 温度: actual = raw - zero，不使用满量程。
+ * 其他模拟量: actual = (raw - zero) * full / 5，不再放大100倍。
+ * zero 按 int16_t 解释，full 为被测对象物理满量程。
  *============================================================================*/
-static uint16_t Apply_Calibration(uint16_t raw, uint16_t zero, uint16_t full)
+static uint16_t Apply_Analog_Calibration(uint16_t raw, int16_t zero, uint16_t full)
 {
     int32_t cal;
     if (full == 0) {
         // 未标定时，直接返回原始值
         return raw;
     }
-    cal = ((int32_t)raw - (int32_t)zero) * 1000 / (int32_t)full;
+    cal = ((int32_t)raw - (int32_t)zero) * (int32_t)full / (int32_t)ANALOG_INPUT_FULL_SCALE;
     if (cal < 0) cal = 0;
     if (cal > 65535) cal = 65535;
     return (uint16_t)cal;
@@ -240,34 +245,43 @@ static uint16_t Apply_Calibration(uint16_t raw, uint16_t zero, uint16_t full)
  *============================================================================*/
 void Modbus_Input_Reg_Update(void)
 {
+    uint16_t temp1;
+    uint16_t temp2;
+    uint16_t temp3;
+    uint16_t temp4;
+
     // 读取原始 ADC 值 (内部ADC先采样，再读UART ADC)
     adc_sensor_read_all();
+    temp1 = adc_sensor_get_temp1();
+    temp2 = adc_sensor_get_temp2();
+    temp3 = adc_sensor_get_temp3();
+    temp4 = adc_sensor_get_temp4();
     // 30020~30027: 原始采集值 (不做任何换算)
     g_input_regs[RAW_IR_VOLT_OFFSET]  = uart_adc_get_voltage();
     g_input_regs[RAW_IR_CURR_OFFSET]  = uart_adc_get_current();
-    g_input_regs[RAW_IR_TEMP1_OFFSET] = adc_sensor_get_temp1();
-    g_input_regs[RAW_IR_TEMP2_OFFSET] = adc_sensor_get_temp2();
-    g_input_regs[RAW_IR_TEMP3_OFFSET] = adc_sensor_get_temp3();
-    g_input_regs[RAW_IR_TEMP4_OFFSET] = adc_sensor_get_temp4();
+    g_input_regs[RAW_IR_TEMP1_OFFSET] = adc_sensor_get_temp1_raw();
+    g_input_regs[RAW_IR_TEMP2_OFFSET] = adc_sensor_get_temp2_raw();
+    g_input_regs[RAW_IR_TEMP3_OFFSET] = adc_sensor_get_temp3_raw();
+    g_input_regs[RAW_IR_TEMP4_OFFSET] = adc_sensor_get_temp4_raw();
     g_input_regs[RAW_IR_EXT1_OFFSET]  = adc_sensor_get_ext1();
     g_input_regs[RAW_IR_EXT2_OFFSET] = adc_sensor_get_ext2();
-    // 30000~30009: 已校准值 (经校零/满量程换算，公式: (raw-zero)/full*100)
-    g_input_regs[REG_DC_VOLT_OFFSET]  = Apply_Calibration(g_input_regs[RAW_IR_VOLT_OFFSET],
-        g_holding_regs[HLD_VOLT_ZERO_OFFSET], g_holding_regs[HLD_VOLT_FULL_OFFSET]);
-    g_input_regs[REG_DC_CURR_OFFSET]  = Apply_Calibration(g_input_regs[RAW_IR_CURR_OFFSET],
-        g_holding_regs[HLD_CURR_ZERO_OFFSET], g_holding_regs[HLD_CURR_FULL_OFFSET]);
-    g_input_regs[REG_TEMP_T1_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_TEMP1_OFFSET],
-        g_holding_regs[HLD_TEMP1_ZERO_OFFSET], g_holding_regs[HLD_TEMP1_FULL_OFFSET]);
-    g_input_regs[REG_TEMP_T2_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_TEMP2_OFFSET],
-        g_holding_regs[HLD_TEMP2_ZERO_OFFSET], g_holding_regs[HLD_TEMP2_FULL_OFFSET]);
-    g_input_regs[REG_TEMP_T3_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_TEMP3_OFFSET],
-        g_holding_regs[HLD_TEMP3_ZERO_OFFSET], g_holding_regs[HLD_TEMP3_FULL_OFFSET]);
-    g_input_regs[REG_TEMP_T4_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_TEMP4_OFFSET],
-        g_holding_regs[HLD_TEMP4_ZERO_OFFSET], g_holding_regs[HLD_TEMP4_FULL_OFFSET]);
-    g_input_regs[REG_EXT_ADC1_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_EXT1_OFFSET],
-        g_holding_regs[HLD_EXT1_ZERO_OFFSET], g_holding_regs[HLD_EXT1_FULL_OFFSET]);
-    g_input_regs[REG_EXT_ADC2_OFFSET] = Apply_Calibration(g_input_regs[RAW_IR_EXT2_OFFSET],
-        g_holding_regs[HLD_EXT2_ZERO_OFFSET], g_holding_regs[HLD_EXT2_FULL_OFFSET]);
+    // 30000~30009: 已校准物理值，不放大100倍
+    g_input_regs[REG_DC_VOLT_OFFSET]  = Apply_Analog_Calibration(g_input_regs[RAW_IR_VOLT_OFFSET],
+        (int16_t)g_holding_regs[HLD_VOLT_ZERO_OFFSET], g_holding_regs[HLD_VOLT_FULL_OFFSET]);
+    g_input_regs[REG_DC_CURR_OFFSET]  = Apply_Analog_Calibration(g_input_regs[RAW_IR_CURR_OFFSET],
+        (int16_t)g_holding_regs[HLD_CURR_ZERO_OFFSET], g_holding_regs[HLD_CURR_FULL_OFFSET]);
+    g_input_regs[REG_TEMP_T1_OFFSET] = Apply_Temperature_Calibration(temp1,
+        (int16_t)g_holding_regs[HLD_TEMP1_ZERO_OFFSET]);
+    g_input_regs[REG_TEMP_T2_OFFSET] = Apply_Temperature_Calibration(temp2,
+        (int16_t)g_holding_regs[HLD_TEMP2_ZERO_OFFSET]);
+    g_input_regs[REG_TEMP_T3_OFFSET] = Apply_Temperature_Calibration(temp3,
+        (int16_t)g_holding_regs[HLD_TEMP3_ZERO_OFFSET]);
+    g_input_regs[REG_TEMP_T4_OFFSET] = Apply_Temperature_Calibration(temp4,
+        (int16_t)g_holding_regs[HLD_TEMP4_ZERO_OFFSET]);
+    g_input_regs[REG_EXT_ADC1_OFFSET] = Apply_Analog_Calibration(g_input_regs[RAW_IR_EXT1_OFFSET],
+        (int16_t)g_holding_regs[HLD_EXT1_ZERO_OFFSET], g_holding_regs[HLD_EXT1_FULL_OFFSET]);
+    g_input_regs[REG_EXT_ADC2_OFFSET] = Apply_Analog_Calibration(g_input_regs[RAW_IR_EXT2_OFFSET],
+        (int16_t)g_holding_regs[HLD_EXT2_ZERO_OFFSET], g_holding_regs[HLD_EXT2_FULL_OFFSET]);
     // REG_WORK_FREQ_OFFSET(0) 由 main.c 中 Freq_Measure_Update() 维护
     // REG_REAL_POWER_OFFSET(3): 实时功率 P = U * I
      g_holding_regs[HLD_CHARGE_SET_OFFSET] = 0;
@@ -282,25 +296,25 @@ void Modbus_Input_Reg_Update(void)
  *============================================================================*/
 int32_t Get_Temperature(void)
 {
-    // 从 30004 获取温度，单位放大100倍，转为Q10格式
-    return (int32_t)g_input_regs[REG_TEMP_T1_OFFSET] * 1024 / 100;
+    // 从 30004 获取实际温度，转为Q10格式
+    return (int32_t)g_input_regs[REG_TEMP_T1_OFFSET] * 1024;
 }
 int32_t Get_Power(void)
 {
-    // 从 30003 获取功率，单位放大100倍，转为Q10格式
-    return (int32_t)g_input_regs[REG_REAL_POWER_OFFSET] * 1024 / 100;
+    // 从 30003 获取实际功率，转为Q10格式
+    return (int32_t)g_input_regs[REG_REAL_POWER_OFFSET] * 1024;
 }
 // 获取目标温度
 int32_t Get_Target_Temp(void)
 {
-    // 保持寄存器里的温度放大100倍，转为Q10格式
-    return (int32_t)g_holding_regs[HLD_TARGET_TEMP_OFFSET] * 1024 / 100;
+    // 保持寄存器里的目标温度为实际值，转为Q10格式
+    return (int32_t)g_holding_regs[HLD_TARGET_TEMP_OFFSET] * 1024;
 }
 // 获取功率设定值 (40011)
 int32_t Get_Power_Setpoint(void)
 {
-    // 保持寄存器里的功率放大100倍，转为Q10格式
-    return (int32_t)g_holding_regs[HLD_POWER_SETPOINT_OFFSET] * 1024 / 100;
+    // 保持寄存器里的功率设定值为实际值，转为Q10格式
+    return (int32_t)g_holding_regs[HLD_POWER_SETPOINT_OFFSET] * 1024;
 }
 
 
