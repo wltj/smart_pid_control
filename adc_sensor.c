@@ -9,7 +9,7 @@
 #define ADC_RESOLUTION 4096
 #define ADC_CONVERT_TIMEOUT 10000U
 #define EXT_INPUT_FULL_SCALE 5
-#define ADC_RESULT_RIGHT_ALIGN 0x20
+#define ADC_RESULT_RIGHT_ALIGN 0x20  // 0x30
 #define ADC_REF_MV 5000
 #define NTC_SUPPLY_MV 5000
 #define NTC_R0 10000
@@ -141,6 +141,9 @@ uint16_t adc_sensor_read_channel(unsigned char channel)
 
     ADC_CONTR &= ~ADC_FLAG;
     ADC_CONTR |= ADC_START;
+
+    for (i = 0; i < 300; i++)
+        ;
 
     for (i = 0; i < ADC_CONVERT_TIMEOUT; i++) {
         if (ADC_CONTR & ADC_FLAG) {
