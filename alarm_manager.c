@@ -106,19 +106,19 @@ static void alarm_update_run_indicator(void)
 
 /*============================================================================
  * 外部数字输入消抖
- * 每 5ms 采样一次，连续 4 次相同读数（20ms）才更新稳定状态，
+ * 每 5ms 采样一次，连续 10 次相同读数（50ms）才更新稳定状态，
  * 过滤继电器/接触器抖动和干扰毛刺。
+ * 注意：缺相检测见 phase_loss_scan()，因需捕获 10ms 短脉冲。
  *============================================================================*/
 #define DI_SAMPLE_TICKS   1U    /* 采样间隔 1 × 5ms = 5ms */
-#define DI_STABLE_COUNT   10U    /* 稳定阈值 10 × 5ms = 50ms */
+#define DI_STABLE_COUNT   10U   /* 稳定阈值 10 × 5ms = 50ms */
 
-/* 消抖通道索引 */
+/* 消抖通道索引（不含缺相，缺相走专用脉冲捕获） */
 #define DI_CH_MAINTENANCE   0
 #define DI_CH_DEV_RUNNING   1
 #define DI_CH_OVER_CURRENT  2
 #define DI_CH_WATER_LACK    3
-#define DI_CH_PHASE_LOSS    4
-#define DI_CH_COUNT         5
+#define DI_CH_COUNT         4
 
 static uint8_t  xdata g_di_stable[DI_CH_COUNT] = {0};
 static uint8_t  xdata g_di_counter[DI_CH_COUNT] = {0};
@@ -140,7 +140,6 @@ static void di_debounce_scan(void)
     raw[DI_CH_DEV_RUNNING]  = DEVICE_RUNNING_READ()  ? 1 : 0;
     raw[DI_CH_OVER_CURRENT] = OVER_CURRENT_IN_READ() ? 1 : 0;
     raw[DI_CH_WATER_LACK]   = WATER_LACK_READ()      ? 1 : 0;
-    raw[DI_CH_PHASE_LOSS]   = PHASE_LOSS_DET_READ()  ? 1 : 0;
 
     /* 首次调用：用当前读数直接初始化稳定状态，避免上电误判 */
     if (!g_di_inited) {
@@ -164,6 +163,59 @@ static void di_debounce_scan(void)
     }
 }
 
+/*============================================================================
+ * 缺相检测（专用脉冲捕获逻辑）
+ * PHASE_LOSS_DET_READ 引脚特性：
+ *   - 持续高电平：至少两相同时缺相
+ *   - 输出~10ms 高电平脉冲：某一相接触不良、时通时断
+ *   - 稳定常低：三相供电正常
+ * 检测策略：每 5ms 采样，连续 2 次高（≥10ms）即判定缺相；
+ *           连续 40 次低（200ms）才判定恢复正常。
+ *           既捕获 10ms 短脉冲，又过滤 <5ms 干扰毛刺。
+ *============================================================================*/
+#define PHASE_LOSS_HIGH_THRESH  2U    /* 连续高 2×5ms=10ms 触发缺相 */
+#define PHASE_LOSS_LOW_CLEAR    40U   /* 连续低 40×5ms=200ms 判定恢复 */
+
+static uint8_t  xdata g_phase_high_cnt = 0;
+static uint8_t  xdata g_phase_low_cnt = 0;
+static uint8_t  xdata g_phase_loss_active = 0;
+static unsigned int xdata g_phase_last_tick = 0;
+static uint8_t  xdata g_phase_inited = 0;
+
+static void phase_loss_scan(void)
+{
+    unsigned int now;
+    uint8_t pin;
+
+    now = g_system_tick_5ms;
+    if ((unsigned int)(now - g_phase_last_tick) < 1U)
+        return;
+    g_phase_last_tick = now;
+
+    pin = PHASE_LOSS_DET_READ() ? 1 : 0;
+
+    /* 首次调用：用当前读数初始化，避免上电误判 */
+    if (!g_phase_inited) {
+        g_phase_loss_active = pin;
+        g_phase_inited = 1;
+        return;
+    }
+
+    if (pin) {
+        /* 高电平：累计连续高采样，达到阈值即锁存缺相 */
+        if (++g_phase_high_cnt >= PHASE_LOSS_HIGH_THRESH) {
+            g_phase_loss_active = 1;
+        }
+        g_phase_low_cnt = 0;
+    } else {
+        /* 低电平：累计连续低采样，稳定 200ms 后清除缺相状态 */
+        if (++g_phase_low_cnt >= PHASE_LOSS_LOW_CLEAR) {
+            g_phase_loss_active = 0;
+        }
+        g_phase_high_cnt = 0;
+    }
+}
+
 void Alarm_Process(void)
 {
     static unsigned char xdata last_start_state = 0;
@@ -173,6 +225,8 @@ void Alarm_Process(void)
 
     /* 数字输入消抖采样（5ms 一次，50ms 稳定确认） */
     di_debounce_scan();
+    /* 缺相脉冲捕获（5ms 采样，捕获 10ms 短脉冲） */
+    phase_loss_scan();
 
     /* 调试模式：屏蔽所有故障，不清除以便观察 */
     if (IS_DEBUG_MODE()) {
@@ -235,8 +289,8 @@ void Alarm_Process(void)
     /* 水压故障/缺水（P4.3 高电平，消抖后） */
     if (g_di_stable[DI_CH_WATER_LACK]) g_discrete_inputs[DI_WATER_PRESS_FAULT_OFFSET] = 1;
 
-    /* 缺相故障（P0.6 高电平，消抖后） */
-    if (g_di_stable[DI_CH_PHASE_LOSS]) g_discrete_inputs[DI_PHASE_LOSS_FAULT_OFFSET] = 1;
+    /* 缺相故障（P0.6：持续高=两相缺相，10ms脉冲=接触不良，脉冲捕获） */
+    if (g_phase_loss_active) g_discrete_inputs[DI_PHASE_LOSS_FAULT_OFFSET] = 1;
 
     /* 总故障判断 */
     g_alarm_any_fault = g_discrete_inputs[DI_WATER_TEMP_FAULT_OFFSET] ||
