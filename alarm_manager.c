@@ -26,13 +26,28 @@ void alarm_gpio_init(void)
     P0M0 |= BIT(IO_TOTAL_FAULT_PIN) | BIT(IO_RUN_IND_PIN);
     P0M1 &= ~(BIT(IO_TOTAL_FAULT_PIN) | BIT(IO_RUN_IND_PIN));
 
-    /* 故障输入高阻 */
-    P5M0 &= ~BIT(IO_OVER_CURRENT_IN_PIN);
-    P5M1 |= BIT(IO_OVER_CURRENT_IN_PIN);
-    P4M0 &= ~(BIT(IO_WATER_LACK_PIN) | BIT(IO_MAINTENANCE_PIN));
-    P4M1 |= BIT(IO_WATER_LACK_PIN) | BIT(IO_MAINTENANCE_PIN);
+    // ========== 输入引脚 ==========
+    // 1. 过流输入 P5.0：由高阻改为准双向口，并写1
+    P5M0 &= ~BIT(IO_OVER_CURRENT_IN_PIN);                     // 00 准双向
+    P5M1 &= ~BIT(IO_OVER_CURRENT_IN_PIN);                     // 00 准双向
+    PIN_SET(IO_OVER_CURRENT_IN_PORT, IO_OVER_CURRENT_IN_PIN); // P5.0 = 1
+
+    // 2. 缺水输入 P4.3：由高阻改为准双向口，并写1
+    P4M0 &= ~BIT(IO_WATER_LACK_PIN);
+    P4M1 &= ~BIT(IO_WATER_LACK_PIN);
+    PIN_SET(IO_WATER_LACK_PORT, IO_WATER_LACK_PIN);
+
+    // 3. 维修输入 P4.1：由高阻改为准双向口，并写1
+    P4M0 &= ~BIT(IO_MAINTENANCE_PIN);
+    P4M1 &= ~BIT(IO_MAINTENANCE_PIN);
+    PIN_SET(IO_MAINTENANCE_PORT, IO_MAINTENANCE_PIN);
+
+    // 4. 缺相输入 P0.6：高阻，外部已经上拉
     P0M0 &= ~BIT(IO_PHASE_LOSS_DET_PIN);
     P0M1 |= BIT(IO_PHASE_LOSS_DET_PIN);
+
+    /* 注意：P2.1 工作状态输入原本就是准双向口（默认），但同样需要写1，确保弱上拉有效 */
+    PIN_SET(IO_WORK_STATUS_IND_PORT, IO_WORK_STATUS_IND_PIN); // P2.1 = 1
 
     /* 初始全部清零 */
     CLR_PIN(IO_OVER_CURRENT_ALARM_PORT, IO_OVER_CURRENT_ALARM_PIN);
@@ -89,12 +104,75 @@ static void alarm_update_run_indicator(void)
     }
 }
 
+/*============================================================================
+ * 外部数字输入消抖
+ * 每 5ms 采样一次，连续 4 次相同读数（20ms）才更新稳定状态，
+ * 过滤继电器/接触器抖动和干扰毛刺。
+ *============================================================================*/
+#define DI_SAMPLE_TICKS   1U    /* 采样间隔 1 × 5ms = 5ms */
+#define DI_STABLE_COUNT   10U    /* 稳定阈值 10 × 5ms = 50ms */
+
+/* 消抖通道索引 */
+#define DI_CH_MAINTENANCE   0
+#define DI_CH_DEV_RUNNING   1
+#define DI_CH_OVER_CURRENT  2
+#define DI_CH_WATER_LACK    3
+#define DI_CH_PHASE_LOSS    4
+#define DI_CH_COUNT         5
+
+static uint8_t  xdata g_di_stable[DI_CH_COUNT] = {0};
+static uint8_t  xdata g_di_counter[DI_CH_COUNT] = {0};
+static unsigned int xdata g_di_last_tick = 0;
+static uint8_t  xdata g_di_inited = 0;
+
+static void di_debounce_scan(void)
+{
+    uint8_t raw[DI_CH_COUNT];
+    uint8_t i;
+    unsigned int now;
+
+    now = g_system_tick_5ms;
+    if ((unsigned int)(now - g_di_last_tick) < DI_SAMPLE_TICKS)
+        return;
+    g_di_last_tick = now;
+
+    raw[DI_CH_MAINTENANCE]  = MAINTENANCE_READ()     ? 1 : 0;
+    raw[DI_CH_DEV_RUNNING]  = DEVICE_RUNNING_READ()  ? 1 : 0;
+    raw[DI_CH_OVER_CURRENT] = OVER_CURRENT_IN_READ() ? 1 : 0;
+    raw[DI_CH_WATER_LACK]   = WATER_LACK_READ()      ? 1 : 0;
+    raw[DI_CH_PHASE_LOSS]   = PHASE_LOSS_DET_READ()  ? 1 : 0;
+
+    /* 首次调用：用当前读数直接初始化稳定状态，避免上电误判 */
+    if (!g_di_inited) {
+        for (i = 0; i < DI_CH_COUNT; i++) {
+            g_di_stable[i] = raw[i];
+            g_di_counter[i] = 0;
+        }
+        g_di_inited = 1;
+        return;
+    }
+
+    for (i = 0; i < DI_CH_COUNT; i++) {
+        if (raw[i] == g_di_stable[i]) {
+            g_di_counter[i] = 0;
+        } else {
+            if (++g_di_counter[i] >= DI_STABLE_COUNT) {
+                g_di_stable[i] = raw[i];
+                g_di_counter[i] = 0;
+            }
+        }
+    }
+}
+
 void Alarm_Process(void)
 {
     static unsigned char xdata last_start_state = 0;
     static unsigned int xdata start_tick = 0;
     unsigned char start_state;
     unsigned char delay_ok;
+
+    /* 数字输入消抖采样（5ms 一次，50ms 稳定确认） */
+    di_debounce_scan();
 
     /* 调试模式：屏蔽所有故障，不清除以便观察 */
     if (IS_DEBUG_MODE()) {
@@ -105,8 +183,8 @@ void Alarm_Process(void)
         return;
     }
 
-    /* 维修信号：屏蔽所有故障，复位输出和地址 */
-    if (!MAINTENANCE_READ()) {
+    /* 维修信号：屏蔽所有故障，复位输出和地址（消抖后） */
+    if (!g_di_stable[DI_CH_MAINTENANCE]) {
         alarm_clear_latch();
         g_alarm_any_fault = 0;
         alarm_update_outputs();
@@ -120,8 +198,8 @@ void Alarm_Process(void)
         g_coils[COIL_FAULT_RESET_OFFSET] = 0;
     }
 
-    /* 工作状态由外部引脚P2.1决定：待机=1,加热=0，DI取反 */
-    g_discrete_inputs[DI_DEVICE_RUNNING_OFFSET] = DEVICE_RUNNING_READ();
+    /* 工作状态由外部引脚P2.1决定：待机=1,加热=0，DI取反（消抖后） */
+    g_discrete_inputs[DI_DEVICE_RUNNING_OFFSET] = g_di_stable[DI_CH_DEV_RUNNING];
 
     /* 启动状态检测（用于电压/频率 2s 延迟判断）：触屏线圈/按键/远控任一启动均算启动 */
     start_state = (g_coils[COIL_START_STOP_OFFSET] || g_key_running || g_remote_running) ? 1 : 0;
@@ -151,14 +229,14 @@ void Alarm_Process(void)
         g_discrete_inputs[DI_WATER_TEMP_FAULT_OFFSET] = 1;
     }
 
-    /* 过流故障（P5.0 高电平） */
-    if (OVER_CURRENT_IN_READ()) g_discrete_inputs[DI_OVER_CURRENT_FAULT_OFFSET] = 1;
+    /* 过流故障（P5.0 高电平，消抖后） */
+    if (g_di_stable[DI_CH_OVER_CURRENT]) g_discrete_inputs[DI_OVER_CURRENT_FAULT_OFFSET] = 1;
 
-    /* 水压故障/缺水（P4.3 高电平） */
-    if (WATER_LACK_READ()) g_discrete_inputs[DI_WATER_PRESS_FAULT_OFFSET] = 1;
+    /* 水压故障/缺水（P4.3 高电平，消抖后） */
+    if (g_di_stable[DI_CH_WATER_LACK]) g_discrete_inputs[DI_WATER_PRESS_FAULT_OFFSET] = 1;
 
-    /* 缺相故障（P0.6 高电平） */
-    if (PHASE_LOSS_DET_READ()) g_discrete_inputs[DI_PHASE_LOSS_FAULT_OFFSET] = 1;
+    /* 缺相故障（P0.6 高电平，消抖后） */
+    if (g_di_stable[DI_CH_PHASE_LOSS]) g_discrete_inputs[DI_PHASE_LOSS_FAULT_OFFSET] = 1;
 
     /* 总故障判断 */
     g_alarm_any_fault = g_discrete_inputs[DI_WATER_TEMP_FAULT_OFFSET] ||
