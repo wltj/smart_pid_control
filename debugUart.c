@@ -30,3 +30,11 @@ void debug_out(char *msg)
 }
 */
 
+void debug_out(char *msg)
+{
+	while (*msg != '\0') {
+		TI = 0;
+		SBUF = *msg++;
+		while (TI == 0);
+	}
+}
