@@ -4,5 +4,6 @@
 
 void init_debug_uart(); //9600bps@11.0592MHz
 void debug_out(char *msg);
+void debug_uart_puts(char *str);
 
 #endif

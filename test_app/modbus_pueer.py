@@ -347,6 +347,13 @@ class ModbusRtuClient(QObject):
             if raw_regs is not None:
                 for i, val in enumerate(raw_regs[:8]):
                     input_regs[20 + i] = val
+            # 读取偏移28~31（EEPROM状态 + IO引脚状态）
+            # BCD地址解析：需将十进制偏移转为BCD编码发送
+            # 28 -> 0x28=40, 4 -> 0x04=4
+            io_regs = self.read_input_registers(0x28, 4)
+            if io_regs is not None:
+                for i, val in enumerate(io_regs[:4]):
+                    input_regs[28 + i] = val
             data['input_regs'] = input_regs
         # 保持寄存器 —— 按计划分批，并组装为完整 HR_COUNT 长度列表
         holding = [0] * HR_COUNT
@@ -542,7 +549,7 @@ class MainWindow(QMainWindow):
         self.client.write_coil(offset, value)
 
     def create_di_tab(self):
-        """离散输入状态显示"""
+        """离散输入状态显示 + IO引脚状态"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         self.di_labels = {}
@@ -559,6 +566,59 @@ class MainWindow(QMainWindow):
             hbox.addWidget(addr_lbl)
             layout.addLayout(hbox)
             self.di_labels[info['offset']] = val_lbl
+
+        # IO引脚实时状态
+        sep = QLabel("── IO引脚实时状态 ──")
+        sep.setStyleSheet("font-weight: bold; color: blue; padding-top: 10px;")
+        layout.addWidget(sep)
+        self.io_labels = {}
+        io_pin_defs = [
+            # (名称, 端口, 引脚号, 寄存器索引, 位)
+            ("加热使能(P5.5)",       "OUT", 0, 0),
+            ("充电完成(P5.4)",       "OUT", 0, 1),
+            ("RS485方向(P5.3)",      "OUT", 0, 2),
+            ("工作状态指示(P2.1)",   "OUT", 0, 3),
+            ("PWM输出(P2.0)",        "OUT", 0, 4),
+            ("总故障报警(P0.7)",     "OUT", 0, 5),
+            ("运行指示灯(P0.1)",     "OUT", 0, 6),
+            ("控制模式(P4.2)",       "OUT", 0, 7),
+            ("缺相报警(P2.7)",       "OUT", 0, 8),
+            ("水压报警(P2.6)",       "OUT", 0, 9),
+            ("水温报警(P2.5)",       "OUT", 0, 10),
+            ("电网报警(P2.4)",       "OUT", 0, 11),
+            ("过流报警(P2.3)",       "OUT", 0, 12),
+            ("频率报警(P2.2)",       "OUT", 0, 13),
+            ("启动按键(P3.7)",       "IN",  1, 0),
+            ("停止按键(P3.6)",       "IN",  1, 1),
+            ("远程信号(P5.2)",       "IN",  1, 2),
+            ("外部工作状态(P5.1)",   "IN",  1, 3),
+            ("外部过流(P5.0)",       "IN",  1, 4),
+            ("缺水检测(P4.3)",       "IN",  1, 5),
+            ("维修模式(P4.1)",       "IN",  1, 6),
+            ("缺相检测(P0.6)",       "IN",  1, 7),
+        ]
+        grid = QWidget()
+        grid_layout = QHBoxLayout(grid)
+        col1 = QVBoxLayout()
+        col2 = QVBoxLayout()
+        half = (len(io_pin_defs) + 1) // 2
+        for i, (name, direction, reg_idx, bit) in enumerate(io_pin_defs):
+            hbox = QHBoxLayout()
+            pin_lbl = QLabel(f"[{direction}] {name}")
+            pin_lbl.setFixedWidth(400)
+            hbox.addWidget(pin_lbl)
+            val_lbl = QLabel("-")
+            val_lbl.setFixedWidth(40)
+            val_lbl.setAlignment(Qt.AlignCenter)
+            hbox.addWidget(val_lbl)
+            self.io_labels[(reg_idx, bit)] = (val_lbl, direction)
+            if i < half:
+                col1.addLayout(hbox)
+            else:
+                col2.addLayout(hbox)
+        grid_layout.addLayout(col1)
+        grid_layout.addLayout(col2)
+        layout.addWidget(grid)
         layout.addStretch()
         return widget
 
@@ -910,6 +970,21 @@ class MainWindow(QMainWindow):
                 # 故障状态用红色高亮
                 if off >= 1 and off <= 6:
                     lbl.setStyleSheet("color: red; font-weight: bold;" if val else "")
+        # IO引脚实时状态
+        if 'input_regs' in data and hasattr(self, 'io_labels'):
+            ir = data['input_regs']
+            io_out_val = ir[29] if len(ir) > 29 else 0
+            io_in_val  = ir[30] if len(ir) > 30 else 0
+            for (reg_idx, bit), (lbl, direction) in self.io_labels.items():
+                if reg_idx == 0:
+                    val = (io_out_val >> bit) & 1
+                else:
+                    val = (io_in_val >> bit) & 1
+                lbl.setText(str(val))
+                if direction == "OUT":
+                    lbl.setStyleSheet("color: blue; font-weight: bold;" if val else "color: gray;")
+                else:
+                    lbl.setStyleSheet("color: green; font-weight: bold;" if val else "color: gray;")
         # 线圈状态
         if 'coils' in data:
             coils = data['coils']
@@ -937,7 +1012,11 @@ class MainWindow(QMainWindow):
             # PID
             for off, (row, col) in self.pid_cells.items():
                 val = hr[off] if off < len(hr) else 0
-                self.pid_table.item(row, col).setText(str(val))
+                if off == 116:
+                    text = f"{val/10:.1f}%"
+                else:
+                    text = str(val)
+                self.pid_table.item(row, col).setText(text)
 
     def _set_value(self, group, text):
         if hasattr(group, 'val_lbl'):

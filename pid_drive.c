@@ -3,6 +3,7 @@
 #include "uart_adc.h"
 #include "modbus_reg_config.h"
 #include "modbus.h"
+#include "board.h"
 
 /* 部分工程头文件未暴露 PWMA 寄存器时，在这里补齐寄存器地址。 */
 #ifndef PWMA_CR1
@@ -413,6 +414,10 @@ void Modbus_Input_Reg_Update(void)
     uint16_t temp2;
     uint16_t temp3;
     uint16_t temp4;
+#ifdef ENABLE_IO_DEBUG
+    uint16_t io_out = 0;
+    uint16_t io_in = 0;
+#endif
 
     /* 先刷新本地 ADC 温度，再读取 UART ADC 的电压、电流和外部模拟量。 */
     adc_sensor_read_all();
@@ -453,6 +458,35 @@ void Modbus_Input_Reg_Update(void)
     g_input_regs[REG_REAL_POWER_OFFSET] = Real_Power_From_VI(
         g_input_regs[REG_DC_VOLT_OFFSET],
         g_input_regs[REG_DC_CURR_OFFSET]);
+
+#ifdef ENABLE_IO_DEBUG
+    /* 输出引脚状态 bit0..bit13 */
+    if (READ_PIN(IO_START_OUT_PORT, IO_START_OUT_PIN))         io_out |= (1<<0);
+    if (READ_PIN(IO_CHARGE_DONE_PORT, IO_CHARGE_DONE_PIN))     io_out |= (1<<1);
+    if (READ_PIN(IO_RS485_DIR_PORT, IO_RS485_DIR_PIN))         io_out |= (1<<2);
+    if (READ_PIN(IO_WORK_STATUS_IND_PORT, IO_WORK_STATUS_IND_PIN)) io_out |= (1<<3);
+    if (READ_PIN(IO_PWM_OUT_PORT, IO_PWM_OUT_PIN))             io_out |= (1<<4);
+    if (READ_PIN(IO_TOTAL_FAULT_PORT, IO_TOTAL_FAULT_PIN))     io_out |= (1<<5);
+    if (READ_PIN(IO_RUN_IND_PORT, IO_RUN_IND_PIN))             io_out |= (1<<6);
+    if (READ_PIN(IO_CTRL_MODE_PORT, IO_CTRL_MODE_PIN))         io_out |= (1<<7);
+    if (READ_PIN(IO_PHASE_LOSS_ALARM_PORT, IO_PHASE_LOSS_ALARM_PIN)) io_out |= (1<<8);
+    if (READ_PIN(IO_WATER_PRESS_ALARM_PORT, IO_WATER_PRESS_ALARM_PIN)) io_out |= (1<<9);
+    if (READ_PIN(IO_WATER_TEMP_ALARM_PORT, IO_WATER_TEMP_ALARM_PIN)) io_out |= (1<<10);
+    if (READ_PIN(IO_GRID_ALARM_PORT, IO_GRID_ALARM_PIN))       io_out |= (1<<11);
+    if (READ_PIN(IO_OVER_CURRENT_ALARM_PORT, IO_OVER_CURRENT_ALARM_PIN)) io_out |= (1<<12);
+    if (READ_PIN(IO_FREQ_ALARM_PORT, IO_FREQ_ALARM_PIN))       io_out |= (1<<13);
+    /* 输入引脚状态 bit0..bit7 */
+    if (READ_PIN(IO_START_IN_PORT, IO_START_IN_PIN))           io_in |= (1<<0);
+    if (READ_PIN(IO_STOP_IN_PORT, IO_STOP_IN_PIN))             io_in |= (1<<1);
+    if (READ_PIN(IO_REMOTE_PORT, IO_REMOTE_PIN))               io_in |= (1<<2);
+    if (READ_PIN(IO_WORK_STATUS_IN_PORT, IO_WORK_STATUS_IN_PIN)) io_in |= (1<<3);
+    if (READ_PIN(IO_OVER_CURRENT_IN_PORT, IO_OVER_CURRENT_IN_PIN)) io_in |= (1<<4);
+    if (READ_PIN(IO_WATER_LACK_PORT, IO_WATER_LACK_PIN))       io_in |= (1<<5);
+    if (READ_PIN(IO_MAINTENANCE_PORT, IO_MAINTENANCE_PIN))     io_in |= (1<<6);
+    if (READ_PIN(IO_PHASE_LOSS_DET_PORT, IO_PHASE_LOSS_DET_PIN)) io_in |= (1<<7);
+    g_input_regs[REG_IO_STATUS_OUT_OFFSET] = io_out;
+    g_input_regs[REG_IO_STATUS_IN_OFFSET]  = io_in;
+#endif
 }
 
 int32_t Get_Temperature(void)

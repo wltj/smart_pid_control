@@ -131,18 +131,6 @@ void Delay20ms()		//@11.0592MHz
 }
 
 /*=========================================================================
-  调试串口输出（UART1）
-=========================================================================*/
-static void debug_uart_puts(char *str)
-{
-	while (*str != '\0') {
-		TI = 0;
-		SBUF = *str++;
-		while (TI == 0);
-	}
-}
-
-/*=========================================================================
   地址测试初始化：给每个寄存器写入特征值，方便屏幕核对地址
 =========================================================================*/
 static void debug_address_test_init(void)
@@ -193,7 +181,7 @@ void gpio_init(void)
 {
 	/* 默认所有端口为准双向口 */
 	P0M0 = 0x00; P0M1 = 0x00;
-	P1M0 = 0x00; P1M1 = 0x00;
+	P1M0 = 0x00; P1M1 = 0x3C; 
 	P2M0 = 0x00; P2M1 = 0x00;
 	P3M0 = 0x00; P3M1 = 0x00;
 	P4M0 = 0x00; P4M1 = 0x00;
@@ -423,6 +411,15 @@ void system_loop(void)
 		elapsed_pid_ticks = (unsigned int)(now_tick - last_pid_tick);
 		last_pid_tick = now_tick;
 		Run_Control_Loop((uint16_t)(elapsed_pid_ticks * 5U));
+	}
+
+	/* 每秒打印占空比（值域0~1000，对应0.0%~100.0%） */
+	if (flag_1s) {
+		char xdata buf[32];
+		unsigned int duty_val = g_holding_regs[HLD_POWER_PID_ADJUST_OFFSET];
+		sprintf(buf, "PWM Duty: %u\r\n", duty_val);
+		debug_uart_puts(buf);
+		flag_1s = 0;
 	}
 
 	WDT_CONTR = 0x36;                            //喂狗
