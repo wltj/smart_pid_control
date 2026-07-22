@@ -56,6 +56,19 @@
 /* 30028 : EEPROM保存状态（调试用） */
 #define REG_EEPROM_SAVE_STATUS_OFFSET 28  // 0=空闲, 1=正在保存, 2=保存成功, 3=保存失败
 
+/* 30029~30030 : IO引脚状态（调试用，受 ENABLE_IO_DEBUG 控制） */
+#define REG_IO_STATUS_OUT_OFFSET 29   // bit15..bit0: 14个输出引脚状态
+#define REG_IO_STATUS_IN_OFFSET  30   // bit15..bit0: 8个输入引脚状态
+
+/* IO调试开关：注释掉此行可关闭引脚状态上报，节省寄存器空间 */
+#define ENABLE_IO_DEBUG
+
+#ifdef ENABLE_IO_DEBUG
+#define INPUT_REG_COUNT_EXTENDED 31
+#else
+#define INPUT_REG_COUNT_EXTENDED 29
+#endif
+
 /* Holding registers (4x), function 03/06/10 */
 #define HLD_PARAM_MAGIC_OFFSET 0
 #define HLD_PARAM_MAGIC_VALUE 0xA55A
@@ -139,7 +152,7 @@
  *============================================================================*/
 #define COIL_COUNT          8     // 线圈数量 (偏移0~6，偏移0未使用)
 #define DI_COUNT            16    // 离散输入数量 (偏移0~21)
-#define INPUT_REG_COUNT     32    // 输入寄存器数量 (偏移0~27，0~9为已校准值，20~27为原始采集值)
+#define INPUT_REG_COUNT     32    // 输入寄存器数量 (偏移0~31，0~9为已校准值，20~30为原始/调试值)
 #define HOLDING_REG_COUNT   117   // 保持寄存器数量 (偏移0~116)
 
 /*============================================================================
