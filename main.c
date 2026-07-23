@@ -187,9 +187,10 @@ void gpio_init(void)
 	P4M0 = 0x00; P4M1 = 0x00;
 	P5M0 = 0x00; P5M1 = 0x00;
 
-	/* 串口接收引脚高阻输入：P0.0(UART3 RX), P0.2(UART4 RX) */
+	/* 串口接收引脚准双向口 + 使能内部上拉：P0.0(UART3 RX), P0.2(UART4 RX) */
 	P0M0 &= ~(BIT(0) | BIT(2));
-	P0M1 |= (BIT(0) | BIT(2));
+	P0M1 &= ~(BIT(0) | BIT(2));
+	P0PU |= BIT(0) | BIT(2);
 
 	/* 启动/停止按钮引脚高阻输入 */
 	P3M0 &= ~(BIT(IO_START_IN_PIN) | BIT(IO_STOP_IN_PIN));
@@ -257,7 +258,7 @@ static void Freq_Measure_Update(void)
 	TF0 = 0;
 	TR0 = 1;                                    //恢复计数
 
-	g_input_regs[REG_WORK_FREQ_OFFSET] = count*5; //1秒闸门，计数值即为频率(Hz)
+	g_input_regs[REG_WORK_FREQ_OFFSET] = count*5/100; //1秒闸门，计数值即为频率(Hz)
 }
 
 /*=========================================================================

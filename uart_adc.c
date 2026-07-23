@@ -21,13 +21,13 @@
 #define STATE_RECV_LOW   2
 #define STATE_WAIT_TAIL  3
 
-uint16_t xdata g_adc_voltage = 0;
-uint16_t xdata g_adc_current = 0;
+volatile uint16_t xdata g_adc_voltage = 0;
+volatile uint16_t xdata g_adc_current = 0;
 
-static unsigned char xdata volt_recv_state = STATE_WAIT_HEAD;
+static volatile unsigned char xdata volt_recv_state = STATE_WAIT_HEAD;
 static unsigned char xdata volt_recv_high = 0;
 static unsigned char xdata volt_recv_low = 0;
-static unsigned char xdata curr_recv_state = STATE_WAIT_HEAD;
+static volatile unsigned char xdata curr_recv_state = STATE_WAIT_HEAD;
 static unsigned char xdata curr_recv_high = 0;
 static unsigned char xdata curr_recv_low = 0;
 
@@ -127,18 +127,33 @@ void uart_adc_init(void)
     curr_recv_state = STATE_WAIT_HEAD;
     g_adc_voltage = 0;
     g_adc_current = 0;
-    uart3_init(9600);
-    uart4_init(9600);
+    uart3_init(1200);
+    uart4_init(1200);
     EA = 1;
 }
 
 uint16_t uart_adc_get_voltage(void)
 {
-    return g_adc_voltage;
+    uint16_t value;
+    unsigned char ea_state;
+
+    ea_state = EA;
+    EA = 0;
+    value = g_adc_voltage;
+    EA = ea_state;
+    return value;
 }
 
 uint16_t uart_adc_get_current(void)
 {
-    return g_adc_current;
+    uint16_t value;
+    unsigned char ea_state;
+
+    ea_state = EA;
+    EA = 0;
+    value = g_adc_current;
+    EA = ea_state;
+    return value;
 }
+
 
