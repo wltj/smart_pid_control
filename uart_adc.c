@@ -15,6 +15,10 @@
 #define FRAME_HEAD 0xAA
 #define FRAME_TAIL 0xFF
 
+/* 12 位 ADC 分辨率与满量程电压基准，用于将原始值换算成 0~5V 电压量。 */
+#define UART_ADC_RESOLUTION 4096
+#define UART_ADC_FULL_SCALE 5
+
 /* 接收状态机状态 */
 #define STATE_WAIT_HEAD  0
 #define STATE_RECV_HIGH  1
@@ -132,6 +136,13 @@ void uart_adc_init(void)
     EA = 1;
 }
 
+/* 将串口接收的 0~4095 原始 ADC 值换算成 0~5V 电压量。 */
+static uint16_t uart_adc_raw_to_voltage(uint16_t raw)
+{
+    if (raw >= UART_ADC_RESOLUTION) raw = UART_ADC_RESOLUTION - 1;
+    return (uint16_t)((uint32_t)raw * UART_ADC_FULL_SCALE / (UART_ADC_RESOLUTION - 1));
+}
+
 uint16_t uart_adc_get_voltage(void)
 {
     uint16_t value;
@@ -139,7 +150,7 @@ uint16_t uart_adc_get_voltage(void)
 
     ea_state = EA;
     EA = 0;
-    value = g_adc_voltage;
+    value = uart_adc_raw_to_voltage(g_adc_voltage);
     EA = ea_state;
     return value;
 }
@@ -151,7 +162,7 @@ uint16_t uart_adc_get_current(void)
 
     ea_state = EA;
     EA = 0;
-    value = g_adc_current;
+    value = uart_adc_raw_to_voltage(g_adc_current);
     EA = ea_state;
     return value;
 }

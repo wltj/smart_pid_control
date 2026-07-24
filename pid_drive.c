@@ -18,7 +18,7 @@
 #define PWMA_CCR1L  (*(xdata volatile unsigned char *)0xFED6)
 #endif
 
-/* UART ADC 已经把 0~5V 输入转换成电压量，这里用 5 作为模拟量满刻度基准。 */
+/* UART ADC 接收 0~4095 原始值后已换算成 0~5V 电压量，这里用 5 作为模拟量满刻度基准。 */
 #define ANALOG_INPUT_FULL_SCALE 5U
 
 /* PID 增益寄存器按百分数录入：100 表示 1.00 倍。 */
